@@ -1,0 +1,182 @@
+import express, { type Express } from 'express';
+import path from 'node:path';
+import { SessionStore, type MessageRole } from './session-store.js';
+
+const STATIC_INDEX = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Arcane</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #080712; color: #f7f2ff; }
+      * { box-sizing: border-box; }
+      body { margin: 0; height: 100vh; overflow: hidden; }
+      header { height: 48px; display: flex; gap: 12px; align-items: center; padding: 0 16px; border-bottom: 1px solid #26213b; background: #100e1d; }
+      header strong { color: #d8b4fe; }
+      button, input, textarea, select { font: inherit; }
+      button { border: 1px solid #7c3aed; background: #6d28d9; color: white; border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+      button.secondary { background: #17142a; border-color: #3b315b; }
+      main { height: calc(100vh - 48px); display: grid; grid-template-columns: 340px 1fr; }
+      aside { border-right: 1px solid #26213b; background: #0d0b18; display: grid; grid-template-rows: auto 1fr auto; min-width: 0; }
+      .sessions { display: flex; gap: 8px; padding: 10px; border-bottom: 1px solid #26213b; }
+      select { min-width: 0; flex: 1; border: 1px solid #3b315b; background: #17142a; color: #f7f2ff; border-radius: 10px; padding: 8px; }
+      .messages { padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+      .message { border: 1px solid #2d2647; background: #151225; border-radius: 14px; padding: 10px; white-space: pre-wrap; }
+      .message.user { border-color: #7c3aed; }
+      .composer { padding: 10px; border-top: 1px solid #26213b; display: grid; gap: 8px; }
+      textarea { resize: none; height: 92px; border: 1px solid #3b315b; background: #17142a; color: #f7f2ff; border-radius: 12px; padding: 10px; }
+      iframe { width: 100%; height: 100%; border: 0; background: white; }
+      .empty { color: #a78bfa; padding: 12px; }
+    </style>
+  </head>
+  <body>
+    <header><strong>Arcane</strong><span>chat + canvas, no circus.</span><button id="snapshot" class="secondary">Snapshot</button></header>
+    <main>
+      <aside>
+        <div class="sessions"><select id="sessions"></select><button id="new">New</button></div>
+        <div id="messages" class="messages"><p class="empty">Pick or create a session.</p></div>
+        <form id="composer" class="composer"><textarea id="content" placeholder="Message the agent..."></textarea><button>Send</button></form>
+      </aside>
+      <iframe id="artifact" title="Arcane canvas"></iframe>
+    </main>
+    <script>
+      let currentId = null;
+      const sessionsEl = document.querySelector('#sessions');
+      const messagesEl = document.querySelector('#messages');
+      const artifactEl = document.querySelector('#artifact');
+      const contentEl = document.querySelector('#content');
+
+      async function api(path, options = {}) {
+        const res = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
+        if (!res.ok) throw new Error(await res.text());
+        if (res.status === 204) return null;
+        return res.json();
+      }
+
+      async function loadSessions(selectId) {
+        const sessions = await api('/api/sessions');
+        sessionsEl.innerHTML = sessions.map(s => '<option value="' + s.id + '">' + escapeHtml(s.title) + '</option>').join('');
+        if (sessions.length) await loadSession(selectId || sessions[0].id);
+      }
+
+      async function loadSession(id) {
+        currentId = id;
+        sessionsEl.value = id;
+        const data = await api('/api/sessions/' + id);
+        messagesEl.innerHTML = data.messages.length ? data.messages.map(renderMessage).join('') : '<p class="empty">No messages yet. Start the spell.</p>';
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        artifactEl.src = '/artifact/' + id + '/index.html?t=' + Date.now();
+      }
+
+      function renderMessage(m) {
+        return '<div class="message ' + m.role + '"><strong>' + escapeHtml(m.role) + '</strong><br>' + escapeHtml(m.content) + '</div>';
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      }
+
+      sessionsEl.addEventListener('change', () => loadSession(sessionsEl.value));
+      document.querySelector('#new').addEventListener('click', async () => {
+        const title = prompt('Session title?', 'Untitled session') || 'Untitled session';
+        const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ title }) });
+        await loadSessions(session.id);
+      });
+      document.querySelector('#snapshot').addEventListener('click', async () => {
+        if (!currentId) return;
+        await api('/api/sessions/' + currentId + '/snapshots', { method: 'POST', body: JSON.stringify({ summary: 'manual snapshot' }) });
+        alert('Snapshot saved. Tiny time machine acquired.');
+      });
+      document.querySelector('#composer').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const content = contentEl.value.trim();
+        if (!currentId || !content) return;
+        contentEl.value = '';
+        await api('/api/sessions/' + currentId + '/messages', { method: 'POST', body: JSON.stringify({ role: 'user', content }) });
+        await loadSession(currentId);
+      });
+
+      loadSessions();
+    </script>
+  </body>
+</html>`;
+
+export function createArcaneApp(store = new SessionStore(), agentWebhook = process.env.ARCANE_AGENT_WEBHOOK): Express {
+  const app = express();
+  app.use(express.json({ limit: '5mb' }));
+  app.use(express.text({ type: ['text/*', 'application/javascript', 'text/css', 'text/html'], limit: '5mb' }));
+
+  app.get('/', (_req, res) => res.type('html').send(STATIC_INDEX));
+
+  app.get('/api/sessions', async (_req, res, next) => {
+    try { res.json(await store.listSessions()); } catch (error) { next(error); }
+  });
+
+  app.post('/api/sessions', async (req, res, next) => {
+    try { res.status(201).json(await store.createSession(req.body?.title)); } catch (error) { next(error); }
+  });
+
+  app.get('/api/sessions/:sessionId', async (req, res, next) => {
+    try {
+      const session = await store.getSession(req.params.sessionId);
+      if (!session) return res.status(404).json({ error: 'session not found' });
+      res.json({ session, messages: await store.listMessages(session.id), files: await store.listFiles(session.id) });
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/sessions/:sessionId/messages', async (req, res, next) => {
+    try {
+      const role = (req.body?.role || 'user') as MessageRole;
+      const content = String(req.body?.content || '');
+      const message = await store.appendMessage(req.params.sessionId, role, content);
+      if (agentWebhook && role === 'user') {
+        fetch(agentWebhook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: req.params.sessionId, message }) }).catch(() => undefined);
+      }
+      res.status(201).json(message);
+    } catch (error) { next(error); }
+  });
+
+  app.put('/api/sessions/:sessionId/files/*', async (req, res, next) => {
+    try {
+      const filePath = (req.params as Record<string, string>)[0];
+      const content = typeof req.body === 'string' ? req.body : String(req.body?.content || '');
+      await store.writeFile(req.params.sessionId, filePath, content);
+      res.status(204).end();
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/sessions/:sessionId/snapshots', async (req, res, next) => {
+    try { res.status(201).json(await store.createSnapshot(req.params.sessionId, req.body?.summary || '')); } catch (error) { next(error); }
+  });
+
+  app.use('/artifact/:sessionId', async (req, res, next) => {
+    try {
+      const session = await store.getSession(req.params.sessionId);
+      if (!session) return res.status(404).send('session not found');
+      express.static(store.artifactRoot(session.id), { extensions: ['html'] })(req, res, next);
+    } catch (error) { next(error); }
+  });
+
+  app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(400).json({ error: error.message });
+  });
+
+  return app;
+}
+
+export async function main(): Promise<void> {
+  const port = Number(process.env.PORT || 8787);
+  const store = new SessionStore(process.env.ARCANE_HOME || path.join(process.cwd(), '.arcane'));
+  const app = createArcaneApp(store);
+  app.listen(port, () => {
+    console.log(`Arcane running: http://127.0.0.1:${port}`);
+  });
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
