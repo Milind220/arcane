@@ -47,14 +47,15 @@ The agent-facing boundary stays small. Agents receive structured context and sub
 
 V0 scope — prove the loop before building the cathedral:
 
-- A locally running Arcane server on the agent machine, exposed with Cloudflare Tunnel or ngrok for phone access.
-- Side-by-side chat plus live artifact/canvas pane. The chat pane acts like a Hermes/OpenClaw messaging provider: user messages entered in Arcane are forwarded into the agent conversation path.
-- Local MCP server from day one. This is not optional ceremony; it is the clean boundary where the agent writes artifacts and reads user visual context.
+- A locally running Arcane server on the user's agent machine, exposed with Cloudflare Tunnel or ngrok for phone access.
+- Side-by-side chat plus live artifact/canvas pane. Nothing fancier yet. No annotation, no DOM selection, no doodles, no screenshot context.
+- The chat pane acts like a Hermes/OpenClaw messaging provider: user messages entered in Arcane are forwarded into the agent conversation path.
+- Local MCP server from day one. This is the clean boundary where the agent writes artifacts and reads session metadata, but v0 tools stay tiny.
 - A workspace-backed artifact directory where the agent can create/update HTML/CSS/JS files, with hot reload into the canvas pane.
-- Selection publishing: clicking/selecting a DOM node or region in the artifact sends structured context back through MCP (`selectedElement`, DOM path, text snippet, bounding box, screenshot reference when available).
 - First-class HTML artifact mode for v0. Structured blocks remain the desired durable protocol, but v0 may use sandboxed HTML files because that proves the human loop fastest.
-- Snapshot/history for artifact versions.
-- Paper-like acceptance flow: agent creates a visual artifact, human selects/circles/comments on a specific part, agent revises that exact target, browser updates live.
+- Session continuation is mandatory: canvas state, artifact files, snapshots, and chat/session history persist on the user's agent machine.
+- Resume flow: user opens an existing Arcane session, sees prior chat plus current artifact state, and continues from there.
+- Acceptance flow: user opens the tunnel URL, chats with the agent, agent updates the canvas/artifact, browser hot reloads, user closes/reopens later and the session continues.
 
 MVP/v1 scope after the loop works:
 
@@ -87,14 +88,14 @@ Use a TypeScript monorepo.
 
 ```text
 apps/
-  web/                         # Canvas UI, renderer, comments, selection, snapshots
+  web/                         # Chat + artifact/canvas UI, session picker, hot reload
   mcp-local/                   # Local stdio/http launcher around the shared MCP server
   api/                         # Hosted Canvas API and MCP HTTP deployment entrypoint
   openai-gateway/              # OpenAI-compatible bridge for OpenClaw/Open WebUI
 
 packages/
   canvas-schema/               # JSON Schema, TypeScript types, validators, migrations
-  canvas-store/                # Event log, snapshots, optimistic concurrency, storage adapters
+  session-store/               # Local session metadata, chat history, artifact snapshots
   canvas-ops/                  # Typed operation definitions, validation, diff helpers
   mcp-server/                  # Shared MCP tools, resources, prompts, output schemas
   auth/                        # Hosted OAuth scopes, token checks, local token support
@@ -237,12 +238,13 @@ Use Arcane for visual plans, flows, UI states, diagrams, and review artifacts. R
 V0 local experiment flow:
 
 1. Start Arcane locally on the Hermes machine.
-2. Arcane starts the web app, artifact workspace, hot-reload server, and local MCP server.
+2. Arcane starts the web app, artifact workspace, hot-reload server, local persistence, and local MCP server.
 3. Expose the web app through Cloudflare Tunnel or ngrok and send Milind the URL.
 4. Milind opens Arcane and uses it as the chat interface.
 5. Arcane forwards typed messages into the Hermes conversation/gateway path.
-6. Hermes uses the Arcane MCP tools to write/update artifact files and read selection/context.
-7. Browser hot reload shows edits immediately; user selection/comment state is available to the agent.
+6. Hermes uses the Arcane MCP tools to write/update artifact files and read session metadata.
+7. Browser hot reload shows edits immediately.
+8. Arcane stores session state locally so the same chat+canvas can be resumed later.
 
 Hosted/commercial flow:
 
@@ -376,23 +378,27 @@ Mitigation: scope the product to agent-readable visual workspaces, core blocks, 
 
 ## 13. First Sprint Task List for Codex Execution
 
-Goal: prove the live shared operating picture loop, not the whole cathedral. Tiny cathedral later.
+Goal: prove chat + visual output + resume. Nothing else. Keep the clown car parked.
 
 1. Initialize a TypeScript monorepo with `apps/web`, `apps/mcp-local`, `apps/artifact-server`, and minimal `packages/*`.
-2. Create a local artifact workspace at `.arcane/workspaces/<canvasId>/` with `index.html`, `styles.css`, and optional `script.js`.
-3. Build `apps/web`: side-by-side chat pane and artifact iframe/pane, with Vite/WebSocket hot reload.
-4. Build `apps/artifact-server`: serves the current workspace, watches file changes, snapshots versions, and provides preview URLs.
+2. Create local persistence under `.arcane/`:
+   - `.arcane/sessions/<sessionId>/session.json`
+   - `.arcane/sessions/<sessionId>/messages.jsonl`
+   - `.arcane/sessions/<sessionId>/artifact/index.html`
+   - `.arcane/sessions/<sessionId>/artifact/styles.css`
+   - `.arcane/sessions/<sessionId>/snapshots/`
+3. Build `apps/web`: session list/resume screen, side-by-side chat pane and artifact iframe/pane, with Vite/WebSocket hot reload.
+4. Build `apps/artifact-server`: serves the selected session artifact, watches file changes, snapshots versions, and provides preview URLs.
 5. Build `packages/mcp-server` + `apps/mcp-local` with the small v0 tool surface:
-   - `arcane_create_canvas`
+   - `arcane_create_session`
+   - `arcane_list_sessions`
+   - `arcane_get_session`
    - `arcane_write_file`
    - `arcane_read_file`
    - `arcane_list_files`
-   - `arcane_get_selection`
-   - `arcane_get_screenshot`
+   - `arcane_append_message`
    - `arcane_create_snapshot`
-6. Add selection capture in the artifact pane: selected DOM node, CSS selector/path, text, bounding box, and screenshot reference.
-7. Add user comment/annotation payloads attached to selection or rectangle regions. Doodles can be ugly; function beats art school.
-8. Add Hermes local gateway proof: messages typed in Arcane are forwarded to a configured Hermes/local endpoint or a documented shim script.
-9. Add tunnel helper docs/scripts for Cloudflare Tunnel/ngrok so the phone loop works.
-10. Acceptance test: Milind opens tunnel URL, asks agent for an HTML plan, selects one card/section, says “more detail here,” agent reads selection over MCP, edits file, hot reload updates the exact section.
-11. After that passes, introduce structured canvas blocks/events as v1, using the existing protocol plan instead of letting HTML become permanent spaghetti.
+6. Add Hermes local gateway proof: messages typed in Arcane are forwarded to a configured Hermes/local endpoint or a documented shim script.
+7. Add tunnel helper docs/scripts for Cloudflare Tunnel/ngrok so the phone loop works.
+8. Acceptance test: Milind opens tunnel URL, chats with the agent, agent updates the artifact, browser hot reloads, Milind closes/reopens the URL later, selects the same session, and continues with prior chat + canvas intact.
+9. After that passes, add selection/annotation/context tools. Then structured blocks/events. In that order. No architecture cosplay before proof.
