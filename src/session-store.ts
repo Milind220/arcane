@@ -30,14 +30,14 @@ const DEFAULT_HTML = `<!doctype html>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Arcane artifact</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="empty-state">
-      <p>Arcane canvas ready.</p>
-      <p>Ask the agent to draw something useful here.</p>
+      <h1>Arcane session ready</h1>
+      <p>Ask the agent to write HTML, CSS, or JS into this canvas.</p>
     </main>
-    <script src="/script.js"></script>
+    <script src="script.js"></script>
   </body>
 </html>
 `;

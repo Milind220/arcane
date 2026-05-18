@@ -10,6 +10,7 @@ describe('SessionStore', () => {
     const store = new SessionStore(root);
 
     const session = await store.createSession('Copper plan');
+    const defaultHtml = await store.readFile(session.id, 'index.html');
     await store.appendMessage(session.id, 'user', 'make me a visual plan');
     await store.writeFile(session.id, 'index.html', '<h1>Hello Arcane</h1>');
 
@@ -20,6 +21,9 @@ describe('SessionStore', () => {
     expect(resumed?.title).toBe('Copper plan');
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ role: 'user', content: 'make me a visual plan' });
+    expect(defaultHtml).toContain('href="styles.css"');
+    expect(defaultHtml).toContain('src="script.js"');
+    expect(defaultHtml).not.toContain('href="/styles.css"');
     expect(html).toContain('Hello Arcane');
   });
 

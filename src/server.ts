@@ -274,6 +274,7 @@ export function createDefaultAgentBridge(): AgentBridge | null {
       const prompt = [
         `You are responding inside Arcane session ${sessionId}.`,
         'Arcane is a local chat+canvas app. If Arcane MCP tools are available, use them to update the session artifact files before replying.',
+        'When writing artifact HTML, link CSS/JS with relative paths like styles.css and script.js. Never use /styles.css or /script.js because artifacts are served under /artifact/<sessionId>/.',
         `Relevant artifact files: ${files.join(', ') || '(none)'}.`,
         'Keep the final reply short and say what changed.',
         '',
