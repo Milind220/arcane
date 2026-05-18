@@ -43,10 +43,18 @@ const STATIC_INDEX = `<!doctype html>
       .messages { padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
       .message { border: 1px solid #2d2647; background: #151225; border-radius: 14px; padding: 10px; white-space: pre-wrap; }
       .message.user { border-color: #7c3aed; }
+      .message.pending { opacity: 0.72; border-style: dashed; }
+      .message.error { border-color: #ef4444; color: #fecaca; }
       .composer { padding: 10px; border-top: 1px solid #26213b; display: grid; gap: 8px; }
+      .composer button[disabled] { opacity: 0.55; cursor: wait; }
       textarea { resize: none; height: 92px; border: 1px solid #3b315b; background: #17142a; color: #f7f2ff; border-radius: 12px; padding: 10px; }
       iframe { width: 100%; height: 100%; border: 0; background: white; }
       .empty { color: #a78bfa; padding: 12px; }
+      @media (max-width: 760px) {
+        body { overflow: auto; }
+        main { height: auto; min-height: calc(100vh - 48px); grid-template-columns: 1fr; grid-template-rows: minmax(56vh, auto) 44vh; }
+        aside { border-right: 0; border-bottom: 1px solid #26213b; min-height: 56vh; }
+      }
     </style>
   </head>
   <body>
@@ -66,6 +74,7 @@ const STATIC_INDEX = `<!doctype html>
       const messagesEl = document.querySelector('#messages');
       const artifactEl = document.querySelector('#artifact');
       const contentEl = document.querySelector('#content');
+      const sendButton = document.querySelector('#composer button');
 
       async function api(path, options = {}) {
         const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
@@ -93,7 +102,20 @@ const STATIC_INDEX = `<!doctype html>
       }
 
       function renderMessage(m) {
-        return '<div class="message ' + m.role + '"><strong>' + escapeHtml(m.role) + '</strong><br>' + escapeHtml(m.content) + '</div>';
+        const classes = ['message', m.role, m.pending ? 'pending' : '', m.error ? 'error' : ''].filter(Boolean).join(' ');
+        return '<div class="' + classes + '"><strong>' + escapeHtml(m.role) + '</strong><br>' + escapeHtml(m.content) + '</div>';
+      }
+
+      function setBusy(isBusy) {
+        sendButton.disabled = isBusy;
+        contentEl.disabled = isBusy;
+        sendButton.textContent = isBusy ? 'Thinking…' : 'Send';
+      }
+
+      function appendTransient(message) {
+        if (messagesEl.querySelector('.empty')) messagesEl.innerHTML = '';
+        messagesEl.insertAdjacentHTML('beforeend', renderMessage(message));
+        messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
       function escapeHtml(value) {
@@ -116,8 +138,25 @@ const STATIC_INDEX = `<!doctype html>
         const content = contentEl.value.trim();
         if (!currentId || !content) return;
         contentEl.value = '';
-        await api('/api/sessions/' + currentId + '/agent', { method: 'POST', body: JSON.stringify({ content }) });
-        await loadSession(currentId);
+        appendTransient({ role: 'user', content, pending: true });
+        appendTransient({ role: 'assistant', content: 'Thinking…', pending: true });
+        setBusy(true);
+        try {
+          const response = await fetch('/api/sessions/' + currentId + '/agent', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', ...(accessToken ? { 'x-arcane-token': accessToken } : {}) },
+            body: JSON.stringify({ content }),
+          });
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            if (!body.assistant) throw new Error(body.error || 'Agent request failed');
+          }
+        } catch (error) {
+          appendTransient({ role: 'assistant', content: 'Error: ' + error.message, error: true });
+        } finally {
+          setBusy(false);
+          await loadSession(currentId);
+        }
       });
 
       loadSessions();
@@ -178,14 +217,23 @@ export function createArcaneApp(
       if (!content) return res.status(400).json({ error: 'content is required' });
 
       const user = await store.appendMessage(session.id, 'user', content);
-      const reply = await agentBridge.respond({
-        sessionId: session.id,
-        content,
-        messages: await store.listMessages(session.id),
-        files: await store.listFiles(session.id),
-      });
-      const assistant = await store.appendMessage(session.id, 'assistant', reply);
-      res.status(201).json({ user, assistant });
+      try {
+        const reply = await agentBridge.respond({
+          sessionId: session.id,
+          content,
+          messages: await store.listMessages(session.id),
+          files: await store.listFiles(session.id),
+        });
+        const assistant = await store.appendMessage(session.id, 'assistant', reply);
+        res.status(201).json({ user, assistant });
+      } catch (error: any) {
+        const assistant = await store.appendMessage(
+          session.id,
+          'assistant',
+          `Agent bridge failed: ${error?.message || String(error)}`,
+        );
+        res.status(502).json({ user, assistant, error: assistant.content });
+      }
     } catch (error) { next(error); }
   });
 

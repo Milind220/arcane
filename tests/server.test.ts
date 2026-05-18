@@ -48,6 +48,28 @@ describe('Arcane web server', () => {
     expect(resumed.body.messages[1].content).toContain(`session=${sessionId}`);
   });
 
+  it('stores a visible assistant error when the agent bridge fails', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-agent-fail-'));
+    const store = new SessionStore(root);
+    const app = createArcaneApp(store, {
+      respond: async () => { throw new Error('bridge exploded'); },
+    });
+
+    const created = await request(app).post('/api/sessions').send({ title: 'Agent fail demo' }).expect(201);
+    const sessionId = created.body.id;
+
+    const response = await request(app)
+      .post(`/api/sessions/${sessionId}/agent`)
+      .send({ content: 'please do a thing' })
+      .expect(502);
+
+    const resumed = await request(app).get(`/api/sessions/${sessionId}`).expect(200);
+
+    expect(response.body.assistant.content).toContain('bridge exploded');
+    expect(resumed.body.messages.map((m: any) => m.role)).toEqual(['user', 'assistant']);
+    expect(resumed.body.messages[1].content).toContain('Agent bridge failed');
+  });
+
   it('protects API and artifact routes when an access token is configured', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'arcane-auth-'));
     const store = new SessionStore(root);
