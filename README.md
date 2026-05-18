@@ -44,6 +44,17 @@ hermes chat --quiet -q "<Arcane session prompt>"
 
 Disable the bridge with `ARCANE_AGENT_DISABLED=1`, or override the binary with `ARCANE_HERMES_BIN=/path/to/hermes`.
 
+## Public tunnel safety
+
+If exposing Arcane through a tunnel, set an access token. The root UI stays loadable, but API/artifact routes require `x-arcane-token` or `?token=`:
+
+```bash
+ARCANE_ACCESS_TOKEN=$(openssl rand -hex 16) npm start
+# open/share http://127.0.0.1:8787/?token=$ARCANE_ACCESS_TOKEN
+```
+
+Without this, a public tunnel can trigger the local Hermes bridge. That is funny only if your threat model is a potato.
+
 ## MCP stdio server
 
 ```bash

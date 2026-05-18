@@ -17,6 +17,10 @@ export interface AgentBridge {
   respond(request: AgentRequest): Promise<string>;
 }
 
+export interface ArcaneAppOptions {
+  accessToken?: string;
+}
+
 const STATIC_INDEX = `<!doctype html>
 <html>
   <head>
@@ -57,13 +61,16 @@ const STATIC_INDEX = `<!doctype html>
     </main>
     <script>
       let currentId = null;
+      const accessToken = new URLSearchParams(location.search).get('token') || '';
       const sessionsEl = document.querySelector('#sessions');
       const messagesEl = document.querySelector('#messages');
       const artifactEl = document.querySelector('#artifact');
       const contentEl = document.querySelector('#content');
 
       async function api(path, options = {}) {
-        const res = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
+        const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
+        if (accessToken) headers['x-arcane-token'] = accessToken;
+        const res = await fetch(path, { ...options, headers });
         if (!res.ok) throw new Error(await res.text());
         if (res.status === 204) return null;
         return res.json();
@@ -81,7 +88,8 @@ const STATIC_INDEX = `<!doctype html>
         const data = await api('/api/sessions/' + id);
         messagesEl.innerHTML = data.messages.length ? data.messages.map(renderMessage).join('') : '<p class="empty">No messages yet. Start the spell.</p>';
         messagesEl.scrollTop = messagesEl.scrollHeight;
-        artifactEl.src = '/artifact/' + id + '/index.html?t=' + Date.now();
+        const tokenParam = accessToken ? '&token=' + encodeURIComponent(accessToken) : '';
+        artifactEl.src = '/artifact/' + id + '/index.html?t=' + Date.now() + tokenParam;
       }
 
       function renderMessage(m) {
@@ -117,10 +125,22 @@ const STATIC_INDEX = `<!doctype html>
   </body>
 </html>`;
 
-export function createArcaneApp(store = new SessionStore(), agentBridge: AgentBridge | null = createDefaultAgentBridge()): Express {
+export function createArcaneApp(
+  store = new SessionStore(),
+  agentBridge: AgentBridge | null = createDefaultAgentBridge(),
+  options: ArcaneAppOptions = {},
+): Express {
   const app = express();
   app.use(express.json({ limit: '5mb' }));
   app.use(express.text({ type: ['text/*', 'application/javascript', 'text/css', 'text/html'], limit: '5mb' }));
+
+  const accessToken = options.accessToken || process.env.ARCANE_ACCESS_TOKEN || '';
+  app.use((req, res, next) => {
+    if (!accessToken || (!req.path.startsWith('/api/') && !req.path.startsWith('/artifact/'))) return next();
+    const supplied = req.get('x-arcane-token') || String(req.query.token || '');
+    if (supplied === accessToken) return next();
+    return res.status(401).json({ error: 'unauthorized' });
+  });
 
   app.get('/', (_req, res) => res.type('html').send(STATIC_INDEX));
 

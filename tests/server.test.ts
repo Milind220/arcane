@@ -47,4 +47,23 @@ describe('Arcane web server', () => {
     expect(resumed.body.messages.map((m: any) => m.role)).toEqual(['user', 'assistant']);
     expect(resumed.body.messages[1].content).toContain(`session=${sessionId}`);
   });
+
+  it('protects API and artifact routes when an access token is configured', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-auth-'));
+    const store = new SessionStore(root);
+    const app = createArcaneApp(store, null, { accessToken: 'secret-goblin' });
+
+    await request(app).get('/').expect(200);
+    await request(app).post('/api/sessions').send({ title: 'Nope' }).expect(401);
+
+    const created = await request(app)
+      .post('/api/sessions')
+      .set('x-arcane-token', 'secret-goblin')
+      .send({ title: 'Locked demo' })
+      .expect(201);
+
+    const sessionId = created.body.id;
+    await request(app).get(`/artifact/${sessionId}/index.html`).expect(401);
+    await request(app).get(`/artifact/${sessionId}/index.html?token=secret-goblin`).expect(200);
+  });
 });
