@@ -4,7 +4,7 @@ Accessed: 2026-05-17.
 
 ## Product thesis
 
-Loomwright should be positioned as the agent-native canvas for work that is too visual and stateful to live in chat, but too early or fluid to become a hard-coded app. The wedge is simple: add a Loomwright MCP server to Codex, Cursor, Claude Code, Copilot, OpenCode, Hermes, or OpenClaw; ask the agent to create or update a workspace; see the result as a living canvas instead of a static HTML artifact link.
+Arcane should be positioned as the agent-native canvas for work that is too visual and stateful to live in chat, but too early or fluid to become a hard-coded app. The wedge is simple: add an Arcane MCP server to Codex, Cursor, Claude Code, Copilot, OpenCode, Hermes, or OpenClaw; ask the agent to create or update a workspace; see the result as a living canvas instead of a static HTML artifact link.
 
 This is not "Figma for agents" as a broad design-suite claim. It is narrower and more valuable: a shared visual workspace where agents can read current canvas state, apply structured mutations, attach rationale, and let humans inspect or steer the next step. Paper.design shows the key behavior: its desktop MCP server lets agents mutate a visible design file, and its docs validate the connection by asking an agent to create a red rectangle in the document ([Paper MCP docs](https://paper.design/docs/mcp)). Figma's current pricing page also lists MCP support for sharing design context with AI coding agents, which confirms that agent-accessible design state is now a mainstream workflow, not a novelty ([Figma pricing](https://www.figma.com/pricing/)).
 
@@ -20,20 +20,20 @@ Primary buyer:
 
 Positioning statement:
 
-> Loomwright turns agent output into a live, inspectable canvas. Your agent can read it, update it, comment on it, and keep working from the same visual state.
+> Arcane turns agent output into a live, inspectable canvas. Your agent can read it, update it, comment on it, and keep working from the same visual state.
 
 Do not lead with "whiteboard" or "design tool." Those categories imply drawing features, design systems, and broad collaboration requirements. Lead with "agent workspace" and "living canvas" because the unsolved pain is continuity between chat, visual artifact, and next agent action.
 
 Competitive/inspiration landscape:
 
-- Paper.design: best proof that local MCP plus visible canvas mutation is compelling. Its setup examples cover Cursor, Claude Code, Codex, Copilot, Antigravity, and OpenCode, so Loomwright should mimic its low-friction onboarding while offering hosted collaboration and a self-host path ([Paper MCP docs](https://paper.design/docs/mcp)).
-- Figma: validates design-context MCP and paid collaboration, but is optimized for design systems and designer workflows. Loomwright should integrate with Figma later, not compete head-on.
-- Vercel AI SDK generative UI: useful inspiration for rich streamed UI, but the canonical Loomwright artifact should be structured canvas blocks/events, not React components. Vercel maps tool calls to streamed React Server Components; Loomwright should treat React as a renderer or export target ([Vercel AI SDK generative UI](https://vercel.com/blog/ai-sdk-3-generative-ui)).
-- OpenClaw/Open WebUI: validates the gateway route. OpenClaw exposes an OpenAI-compatible API endpoint for Open WebUI, so Loomwright should support both MCP-native use and a gateway/chat bridge for agent stacks that already standardize on OpenAI-compatible chat APIs ([Open WebUI OpenClaw docs](https://docs.openwebui.com/getting-started/quick-start/connect-an-agent/openclaw/)).
+- Paper.design: best proof that local MCP plus visible canvas mutation is compelling. Its setup examples cover Cursor, Claude Code, Codex, Copilot, Antigravity, and OpenCode, so Arcane should mimic its low-friction onboarding while offering hosted collaboration and a self-host path ([Paper MCP docs](https://paper.design/docs/mcp)).
+- Figma: validates design-context MCP and paid collaboration, but is optimized for design systems and designer workflows. Arcane should integrate with Figma later, not compete head-on.
+- Vercel AI SDK generative UI: useful inspiration for rich streamed UI, but the canonical Arcane artifact should be structured canvas blocks/events, not React components. Vercel maps tool calls to streamed React Server Components; Arcane should treat React as a renderer or export target ([Vercel AI SDK generative UI](https://vercel.com/blog/ai-sdk-3-generative-ui)).
+- OpenClaw/Open WebUI: validates the gateway route. OpenClaw exposes an OpenAI-compatible API endpoint for Open WebUI, so Arcane should support both MCP-native use and a gateway/chat bridge for agent stacks that already standardize on OpenAI-compatible chat APIs ([Open WebUI OpenClaw docs](https://docs.openwebui.com/getting-started/quick-start/connect-an-agent/openclaw/)).
 
 ## Pricing recommendation
 
-Use seat-plus-usage pricing for hosted Loomwright. The market supports it: Cursor charges $20/month for individual Pro and $40/user/month for Teams ([Cursor pricing](https://cursor.com/pricing)); Vercel charges $20/month for Pro with included usage credit and additional usage pricing ([Vercel pricing](https://vercel.com/pricing)); GitHub Copilot individual pricing spans Free, $10/month Pro, and $39/month Pro+, with premium request allowances and overage pricing ([GitHub Copilot pricing](https://github.com/features/copilot/plans)). Loomwright should be cheaper than a full agent IDE seat, but paid enough to cover persistent state, collaboration, auth, storage, rendering, and remote MCP operations.
+Use seat-plus-usage pricing for hosted Arcane. The market supports it: Cursor charges $20/month for individual Pro and $40/user/month for Teams ([Cursor pricing](https://cursor.com/pricing)); Vercel charges $20/month for Pro with included usage credit and additional usage pricing ([Vercel pricing](https://vercel.com/pricing)); GitHub Copilot individual pricing spans Free, $10/month Pro, and $39/month Pro+, with premium request allowances and overage pricing ([GitHub Copilot pricing](https://github.com/features/copilot/plans)). Arcane should be cheaper than a full agent IDE seat, but paid enough to cover persistent state, collaboration, auth, storage, rendering, and remote MCP operations.
 
 Recommended tiers:
 
@@ -45,7 +45,7 @@ Recommended tiers:
 | Team | $25/user/month | Shared workspaces, roles, shared prompts, team canvas library, audit-lite activity log, 50,000 pooled MCP operations/month, 10 GB storage, Hermes/OpenClaw gateway connector | Overage: $10 per additional 50,000 pooled MCP operations |
 | Enterprise | Custom | SSO/SAML/OIDC, SCIM, retention controls, audit exports, VPC/private deployment option, data residency, custom limits, premium support | Annual contract and security review |
 
-Price the metered unit as `MCP tool operation`, not model token. Agents already run inside Codex, Cursor, Claude Code, OpenClaw, or Hermes, so Loomwright should not resell inference by default. Bill for the scarce hosted resources Loomwright actually controls: authenticated remote MCP sessions, tool calls that read/write canvas state, version history, storage, collaboration presence, exports, and sandboxed previews.
+Price the metered unit as `MCP tool operation`, not model token. Agents already run inside Codex, Cursor, Claude Code, OpenClaw, or Hermes, so Arcane should not resell inference by default. Bill for the scarce hosted resources Arcane actually controls: authenticated remote MCP sessions, tool calls that read/write canvas state, version history, storage, collaboration presence, exports, and sandboxed previews.
 
 Free tier limits should be visible but not annoying. The product needs a "red rectangle" moment like Paper's verification flow: a user should connect an agent and see a canvas update in under five minutes. The paywall should appear when the user wants private persistence, more canvases, team collaboration, or substantial agent usage.
 
@@ -56,7 +56,7 @@ Open-source the adoption path:
 - Canvas schema and event format.
 - Local MCP server.
 - Basic web canvas renderer/editor.
-- CLI for `loomwright serve`, `loomwright export`, and `loomwright import`.
+- CLI for `arcane serve`, `arcane export`, and `arcane import`.
 - Self-host single-tenant server with SQLite/Postgres adapter.
 - SDKs/examples for MCP clients and OpenAI-compatible gateway bridges.
 - Reference prompts and MCP configuration snippets.
@@ -82,16 +82,16 @@ Minimum onboarding flow:
 2. User copies an MCP config block.
 3. User copies a short agent prompt.
 4. Agent performs a visible mutation.
-5. Loomwright shows the canvas, event log, and share link.
+5. Arcane shows the canvas, event log, and share link.
 
 Example hosted MCP config:
 
 ```json
 {
   "mcpServers": {
-    "loomwright": {
+    "arcane": {
       "type": "http",
-      "url": "https://mcp.loomwright.com/mcp"
+      "url": "https://mcp.arcane.dev/mcp"
     }
   }
 }
@@ -102,9 +102,9 @@ Example local config:
 ```json
 {
   "mcpServers": {
-    "loomwright": {
+    "arcane": {
       "command": "npx",
-      "args": ["@loomwright/mcp", "--workspace", "."]
+      "args": ["@arcane/mcp", "--workspace", "."]
     }
   }
 }
@@ -113,10 +113,10 @@ Example local config:
 Copy-paste prompt:
 
 ```text
-Use the Loomwright canvas tools for visual plans, flows, UI states, diagrams, and review artifacts. Before creating a new canvas, list existing canvases and reuse the relevant one. Prefer structured blocks and comments over raw HTML. After each meaningful change, summarize what changed and what you need reviewed.
+Use the Arcane canvas tools for visual plans, flows, UI states, diagrams, and review artifacts. Before creating a new canvas, list existing canvases and reuse the relevant one. Prefer structured blocks and comments over raw HTML. After each meaningful change, summarize what changed and what you need reviewed.
 ```
 
-Hermes/OpenClaw onboarding should be a connector, not a fork. For OpenClaw specifically, support an OpenAI-compatible gateway path because its Open WebUI docs already present that as a supported integration model ([Open WebUI OpenClaw docs](https://docs.openwebui.com/getting-started/quick-start/connect-an-agent/openclaw/)). For Hermes, the first paid feature should be a hosted connector that maps gateway sessions to Loomwright canvases with per-agent permissions and usage attribution.
+Hermes/OpenClaw onboarding should be a connector, not a fork. For OpenClaw specifically, support an OpenAI-compatible gateway path because its Open WebUI docs already present that as a supported integration model ([Open WebUI OpenClaw docs](https://docs.openwebui.com/getting-started/quick-start/connect-an-agent/openclaw/)). For Hermes, the first paid feature should be a hosted connector that maps gateway sessions to Arcane canvases with per-agent permissions and usage attribution.
 
 ## Landing page promise and wedge
 
@@ -126,7 +126,7 @@ Hero promise:
 
 Supporting copy:
 
-> Connect Loomwright to Codex, Cursor, Claude Code, OpenClaw, or Hermes. Your agent can read, update, and discuss the same visual workspace your team sees.
+> Connect Arcane to Codex, Cursor, Claude Code, OpenClaw, or Hermes. Your agent can read, update, and discuss the same visual workspace your team sees.
 
 Primary CTA:
 
@@ -138,13 +138,13 @@ Secondary CTA:
 
 First demo:
 
-1. User opens an empty Loomwright canvas.
+1. User opens an empty Arcane canvas.
 2. User copies MCP config into Codex/Cursor/Claude Code.
 3. User asks: "Map the checkout flow and mark the risky states."
 4. Agent creates structured flow blocks, labels risk points, and adds review comments.
 5. User clicks a block, replies with guidance, and agent updates the canvas instead of generating a new static artifact.
 
-The wedge is continuity: the same artifact stays readable by humans and writable by agents. Static HTML previews are disposable; Loomwright canvases become project memory.
+The wedge is continuity: the same artifact stays readable by humans and writable by agents. Static HTML previews are disposable; Arcane canvases become project memory.
 
 ## Product recommendations
 

@@ -1,4 +1,4 @@
-# Loomwright Research Brief
+# Arcane Research Brief
 
 Goal: design a product-grade agent-native canvas that replaces static HTML artifact links with a living chat+canvas workspace.
 

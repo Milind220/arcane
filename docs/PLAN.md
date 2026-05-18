@@ -1,10 +1,10 @@
-# Loomwright Plan
+# Arcane Plan
 
 ## 1. Product Name and Thesis
 
-Product name: Loomwright.
+Product name: Arcane.
 
-One-line thesis: Loomwright is the living canvas for AI agents: a shared visual workspace that agents can read, mutate, comment on, and continue from instead of producing disposable static artifacts.
+One-line thesis: Arcane is the living canvas for AI agents: a shared visual workspace that agents can read, mutate, comment on, and continue from instead of producing disposable static artifacts.
 
 Source anchors: Paper.design MCP proves the read/write visual canvas workflow; MCP docs support MCP as the primary integration standard; MCP authorization and Cloudflare remote MCP material support hosted OAuth-backed remote MCP; Vercel AI SDK generative UI supports React as renderer rather than canonical protocol; OpenClaw/Open WebUI docs support an OpenAI-compatible bridge as a secondary route.
 
@@ -12,7 +12,7 @@ Source anchors: Paper.design MCP proves the read/write visual canvas workflow; M
 
 Hosted MCP is good as the default commercial path, with conditions.
 
-Use hosted remote MCP over Streamable HTTP as the primary integration and monetization surface. It gives Loomwright account auth, tenant isolation, per-canvas permissions, usage metering, durable state, collaboration, share links, audit logs, and paid limits around hosted tool operations, rendering, storage, and history.
+Use hosted remote MCP over Streamable HTTP as the primary integration and monetization surface. It gives Arcane account auth, tenant isolation, per-canvas permissions, usage metering, durable state, collaboration, share links, audit logs, and paid limits around hosted tool operations, rendering, storage, and history.
 
 Do not make hosted MCP the only path. Ship the same protocol as local/self-hosted MCP for private data, local-first developers, clients with incomplete remote MCP/OAuth support, and open-source trust. The hosted product wins on zero-maintenance remote access, managed OAuth, collaboration, admin, durability, and compliance.
 
@@ -23,7 +23,7 @@ Decision: MCP-first, not MCP-only. Hosted remote MCP is the default product. Loc
 Core components:
 
 - Agent hosts: Codex, Cursor, Claude Code, Copilot, OpenCode, Hermes, OpenClaw, Open WebUI through a bridge.
-- Loomwright MCP server: exposes tools, resources, and prompts using one stable schema across hosted and self-hosted deployments.
+- Arcane MCP server: exposes tools, resources, and prompts using one stable schema across hosted and self-hosted deployments.
 - Auth layer: OAuth 2.1-style protected-resource flow for hosted; loopback token or self-host auth for local deployments.
 - Canvas API: validates commands, enforces permissions, checks optimistic concurrency, records audit data, applies rate limits, and persists events.
 - Canvas store: append-only event log, latest document snapshots, assets, comments, selections, render artifacts, and migration metadata.
@@ -35,7 +35,7 @@ Flow:
 
 ```text
 Agent host
-  -> Loomwright MCP server
+  -> Arcane MCP server
   -> Canvas API
   -> Evented canvas store
   -> Web canvas app and render service
@@ -43,12 +43,23 @@ Agent host
 
 The agent-facing boundary stays small. Agents receive structured context and submit typed mutations. They do not execute arbitrary JavaScript, write raw database state, or persist React/HTML as the canonical artifact.
 
-## 4. MVP Scope and Non-Goals
+## 4. V0/MVP Scope and Non-Goals
 
-MVP scope:
+V0 scope — prove the loop before building the cathedral:
+
+- A locally running Arcane server on the agent machine, exposed with Cloudflare Tunnel or ngrok for phone access.
+- Side-by-side chat plus live artifact/canvas pane. The chat pane acts like a Hermes/OpenClaw messaging provider: user messages entered in Arcane are forwarded into the agent conversation path.
+- Local MCP server from day one. This is not optional ceremony; it is the clean boundary where the agent writes artifacts and reads user visual context.
+- A workspace-backed artifact directory where the agent can create/update HTML/CSS/JS files, with hot reload into the canvas pane.
+- Selection publishing: clicking/selecting a DOM node or region in the artifact sends structured context back through MCP (`selectedElement`, DOM path, text snippet, bounding box, screenshot reference when available).
+- First-class HTML artifact mode for v0. Structured blocks remain the desired durable protocol, but v0 may use sandboxed HTML files because that proves the human loop fastest.
+- Snapshot/history for artifact versions.
+- Paper-like acceptance flow: agent creates a visual artifact, human selects/circles/comments on a specific part, agent revises that exact target, browser updates live.
+
+MVP/v1 scope after the loop works:
 
 - Structured canvas schema v1 with blocks, assets, comments, selections, events, and snapshots.
-- Local MCP server and hosted-compatible MCP server code path.
+- Hosted-compatible MCP server code path.
 - Evented store with optimistic concurrency and idempotent writes.
 - Web renderer/editor for core block types.
 - Current selection publishing and selection-aware agent edits.
@@ -57,7 +68,6 @@ MVP scope:
 - Asset registration and proxied asset rendering.
 - Sandboxed HTML import as a gated escape hatch.
 - Agent prompt pack for orientation, selected edits, validation repair, review, and change summaries.
-- Paper-like acceptance flow: connect an MCP client, ask the agent to create a red rectangle and caption in a frame, verify visible mutation, then revise through a comment.
 
 Explicit non-goals for v1:
 
@@ -141,7 +151,7 @@ Core v1 block types:
 
 Default rendering ladder:
 
-1. Structured blocks rendered by Loomwright components.
+1. Structured blocks rendered by Arcane components.
 2. Safe Markdown subset inside text/code blocks.
 3. Sandboxed HTML in a separate-origin iframe with restrictive policy.
 4. Allowlisted component references with pinned component versions and JSON-schema props.
@@ -162,75 +172,83 @@ Concurrency:
 
 ## 7. MCP Tool, Resource, and Prompt List
 
-Use the `loomwright_` prefix for tool names to avoid collisions.
+Use the `arcane_` prefix for tool names to avoid collisions.
 
 Resources:
 
-- `loomwright://canvases`
-- `loomwright://canvases/{canvasId}/manifest`
-- `loomwright://canvases/{canvasId}/snapshot/latest`
-- `loomwright://canvases/{canvasId}/snapshot/{version}`
-- `loomwright://canvases/{canvasId}/events?after={seq}`
-- `loomwright://canvases/{canvasId}/selection/current`
-- `loomwright://canvases/{canvasId}/comments`
-- `loomwright://canvases/{canvasId}/assets/{assetId}`
-- `loomwright://schemas/canvas/v1`
-- `loomwright://schemas/events/v1`
+- `arcane://canvases`
+- `arcane://canvases/{canvasId}/manifest`
+- `arcane://canvases/{canvasId}/snapshot/latest`
+- `arcane://canvases/{canvasId}/snapshot/{version}`
+- `arcane://canvases/{canvasId}/events?after={seq}`
+- `arcane://canvases/{canvasId}/selection/current`
+- `arcane://canvases/{canvasId}/comments`
+- `arcane://canvases/{canvasId}/assets/{assetId}`
+- `arcane://schemas/canvas/v1`
+- `arcane://schemas/events/v1`
 
 Read tools:
 
-- `loomwright_get_manifest`
-- `loomwright_get_snapshot`
-- `loomwright_get_selection`
-- `loomwright_get_block`
-- `loomwright_query_blocks`
-- `loomwright_get_events`
-- `loomwright_get_comments`
-- `loomwright_diff_versions`
-- `loomwright_export_preview`
+- `arcane_get_manifest`
+- `arcane_get_snapshot`
+- `arcane_get_selection`
+- `arcane_get_block`
+- `arcane_query_blocks`
+- `arcane_get_events`
+- `arcane_get_comments`
+- `arcane_diff_versions`
+- `arcane_export_preview`
 
 Write tools:
 
-- `loomwright_create_canvas`
-- `loomwright_apply_ops`
-- `loomwright_set_text`
-- `loomwright_upsert_asset`
-- `loomwright_add_comment`
-- `loomwright_reply_comment`
-- `loomwright_resolve_comment`
-- `loomwright_create_snapshot`
-- `loomwright_set_selection`
-- `loomwright_import_html_sandbox`
-- `loomwright_register_component_ref`
+- `arcane_create_canvas`
+- `arcane_apply_ops`
+- `arcane_set_text`
+- `arcane_upsert_asset`
+- `arcane_add_comment`
+- `arcane_reply_comment`
+- `arcane_resolve_comment`
+- `arcane_create_snapshot`
+- `arcane_set_selection`
+- `arcane_import_html_sandbox`
+- `arcane_register_component_ref`
 
-`loomwright_apply_ops` is the canonical write path. Narrow tools like `loomwright_set_text` and comment tools exist because models call them reliably and they simplify permission checks. Every write returns `canvasId`, `baseVersion`, `resultVersion`, `eventIds`, `affectedBlockIds`, `warnings`, and a preview resource URI.
+`arcane_apply_ops` is the canonical write path. Narrow tools like `arcane_set_text` and comment tools exist because models call them reliably and they simplify permission checks. Every write returns `canvasId`, `baseVersion`, `resultVersion`, `eventIds`, `affectedBlockIds`, `warnings`, and a preview resource URI.
 
 Prompts:
 
-- `loomwright_canvas_agent`
-- `loomwright_canvas_orientation`
-- `loomwright_edit_selected`
-- `loomwright_wireframe_from_brief`
-- `loomwright_review`
-- `loomwright_summarize_changes`
-- `loomwright_repair_validation_errors`
-- `loomwright_export_to_code_plan`
+- `arcane_canvas_agent`
+- `arcane_canvas_orientation`
+- `arcane_edit_selected`
+- `arcane_wireframe_from_brief`
+- `arcane_review`
+- `arcane_summarize_changes`
+- `arcane_repair_validation_errors`
+- `arcane_export_to_code_plan`
 
 Default agent prompt contract:
 
 ```text
-Use Loomwright for visual plans, flows, UI states, diagrams, and review artifacts. Read the current canvas before mutating it. Prefer structured patches over wholesale replacement. Preserve existing user content unless asked to replace it. After substantial changes, create a snapshot and include the canvas link in your response.
+Use Arcane for visual plans, flows, UI states, diagrams, and review artifacts. Read the current canvas before mutating it. Prefer structured patches over wholesale replacement. Preserve existing user content unless asked to replace it. After substantial changes, create a snapshot and include the canvas link in your response.
 ```
 
 ## 8. Hermes Integration Path
 
-Build a first-party Hermes gateway connector around the hosted MCP server. Do not fork the Loomwright protocol for Hermes.
+V0 local experiment flow:
 
-Minimum flow:
+1. Start Arcane locally on the Hermes machine.
+2. Arcane starts the web app, artifact workspace, hot-reload server, and local MCP server.
+3. Expose the web app through Cloudflare Tunnel or ngrok and send Milind the URL.
+4. Milind opens Arcane and uses it as the chat interface.
+5. Arcane forwards typed messages into the Hermes conversation/gateway path.
+6. Hermes uses the Arcane MCP tools to write/update artifact files and read selection/context.
+7. Browser hot reload shows edits immediately; user selection/comment state is available to the agent.
 
-1. User opens or creates a Loomwright canvas from Hermes chat.
+Hosted/commercial flow:
+
+1. User opens or creates an Arcane canvas from Hermes chat.
 2. Hermes connector creates an `agent_session` scoped to tenant, workspace, canvas, user, and agent run.
-3. Loomwright returns `mcp_url`, short-lived token or OAuth authorization URL, `canvas_url`, and the prompt snippet.
+3. Arcane returns `mcp_url`, short-lived token or OAuth authorization URL, `canvas_url`, and the prompt snippet.
 4. Hermes registers the remote MCP server for the current agent session or proxies MCP calls through its tool gateway.
 5. Hermes renders `canvas_url` as a sidecar and subscribes or polls for canvas events.
 6. Tool usage is attributed to the Hermes session for billing, audit, and debugging.
@@ -243,17 +261,17 @@ Hermes-specific code owns only bootstrap, token minting, prompt injection, UI pl
 
 Preferred OpenClaw path:
 
-1. Configure Loomwright as remote or local MCP in the OpenClaw agent runtime when MCP is available.
+1. Configure Arcane as remote or local MCP in the OpenClaw agent runtime when MCP is available.
 2. Keep Open WebUI connected to OpenClaw through its OpenAI-compatible endpoint.
-3. Add the Loomwright prompt snippet to the OpenClaw agent configuration.
-4. Open the Loomwright canvas URL as a sidecar tab or embedded pane.
+3. Add the Arcane prompt snippet to the OpenClaw agent configuration.
+4. Open the Arcane canvas URL as a sidecar tab or embedded pane.
 
 Bridge path for low-friction Open WebUI adoption:
 
-1. Provide `apps/openai-gateway` at local `http://localhost:18880/v1` and hosted `https://gateway.loomwright.com/v1`.
-2. User points Open WebUI at the Loomwright gateway instead of directly at OpenClaw.
-3. Gateway forwards chat completions to OpenClaw, injects Loomwright instructions, and attaches canvas links and metadata.
-4. When downstream tool calling is available, pass through Loomwright tool definitions. When it is not, degrade to prompt-guided behavior and explicit links.
+1. Provide `apps/openai-gateway` at local `http://localhost:18880/v1` and hosted `https://gateway.arcane.local/v1`.
+2. User points Open WebUI at the Arcane gateway instead of directly at OpenClaw.
+3. Gateway forwards chat completions to OpenClaw, injects Arcane instructions, and attaches canvas links and metadata.
+4. When downstream tool calling is available, pass through Arcane tool definitions. When it is not, degrade to prompt-guided behavior and explicit links.
 
 Other agents:
 
@@ -294,7 +312,7 @@ Pricing sketch:
 | Team | $25/user/month | Shared workspaces, roles, prompts, audit-lite, 50,000 pooled ops/month, 10 GB storage, Hermes/OpenClaw connector | $10 per extra 50,000 pooled ops |
 | Enterprise | Custom | SSO/SAML/OIDC, SCIM, retention, audit export, private deployment, data residency, custom limits, support | Annual contract |
 
-Meter hosted usage as `MCP tool operation`, not model tokens. Loomwright controls canvas state, storage, rendering, history, and collaboration; the user's agent runtime controls inference.
+Meter hosted usage as `MCP tool operation`, not model tokens. Arcane controls canvas state, storage, rendering, history, and collaboration; the user's agent runtime controls inference.
 
 ## 11. Implementation Phases and Verification Gates
 
@@ -358,17 +376,23 @@ Mitigation: scope the product to agent-readable visual workspaces, core blocks, 
 
 ## 13. First Sprint Task List for Codex Execution
 
-1. Initialize the TypeScript monorepo with `apps/web`, `apps/mcp-local`, `apps/api`, and core `packages/*`.
-2. Implement `packages/canvas-schema` with v1 JSON Schemas, TypeScript types, fixtures, and validator tests.
-3. Implement `packages/canvas-ops` with typed operations for create, update, move, delete, set text, comments, assets, snapshots, and selection.
-4. Implement `packages/canvas-store` with an in-memory store plus SQLite adapter, append-only events, snapshots, optimistic concurrency, and idempotency.
-5. Implement `packages/mcp-server` with resources, `loomwright_get_manifest`, `loomwright_get_snapshot`, `loomwright_get_selection`, `loomwright_apply_ops`, `loomwright_set_text`, comment tools, and prompt templates.
-6. Wire `apps/mcp-local` to run the MCP server against a local workspace database.
-7. Build `apps/web` minimal canvas renderer for frame, stack, grid, text, shape, connector, image placeholder, table, and code blocks.
-8. Add selection publishing, comments panel, event list, and snapshot controls to the web app.
-9. Add the red-rectangle acceptance fixture and an automated smoke test that applies MCP ops and verifies the rendered canvas state.
-10. Add sandbox policy stubs for `html_sandbox` and reject unsafe imports until the sandbox service is implemented.
-11. Document Codex, Cursor, Claude Code, and OpenClaw local MCP config examples under `examples/`.
-12. Add a first Hermes connector stub that creates a session object, returns `mcp_url`, `canvas_url`, token placeholder, and prompt snippet.
-13. Add an OpenAI-compatible gateway skeleton that forwards chat to an upstream OpenClaw URL and injects the Loomwright prompt.
-14. Add CI tasks for typecheck, schema tests, store tests, MCP smoke tests, and web build.
+Goal: prove the live shared operating picture loop, not the whole cathedral. Tiny cathedral later.
+
+1. Initialize a TypeScript monorepo with `apps/web`, `apps/mcp-local`, `apps/artifact-server`, and minimal `packages/*`.
+2. Create a local artifact workspace at `.arcane/workspaces/<canvasId>/` with `index.html`, `styles.css`, and optional `script.js`.
+3. Build `apps/web`: side-by-side chat pane and artifact iframe/pane, with Vite/WebSocket hot reload.
+4. Build `apps/artifact-server`: serves the current workspace, watches file changes, snapshots versions, and provides preview URLs.
+5. Build `packages/mcp-server` + `apps/mcp-local` with the small v0 tool surface:
+   - `arcane_create_canvas`
+   - `arcane_write_file`
+   - `arcane_read_file`
+   - `arcane_list_files`
+   - `arcane_get_selection`
+   - `arcane_get_screenshot`
+   - `arcane_create_snapshot`
+6. Add selection capture in the artifact pane: selected DOM node, CSS selector/path, text, bounding box, and screenshot reference.
+7. Add user comment/annotation payloads attached to selection or rectangle regions. Doodles can be ugly; function beats art school.
+8. Add Hermes local gateway proof: messages typed in Arcane are forwarded to a configured Hermes/local endpoint or a documented shim script.
+9. Add tunnel helper docs/scripts for Cloudflare Tunnel/ngrok so the phone loop works.
+10. Acceptance test: Milind opens tunnel URL, asks agent for an HTML plan, selects one card/section, says “more detail here,” agent reads selection over MCP, edits file, hot reload updates the exact section.
+11. After that passes, introduce structured canvas blocks/events as v1, using the existing protocol plan instead of letting HTML become permanent spaghetti.

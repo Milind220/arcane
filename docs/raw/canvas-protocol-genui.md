@@ -2,15 +2,15 @@
 
 ## Recommendation
 
-Loomwright v1 should use MCP as the agent integration surface, but the product protocol should be a Loomwright-owned canvas document model: versioned JSON blocks, append-only events, comments, selection context, assets, and snapshots. Agents should mutate the canvas through typed MCP tools. Humans should see those mutations in a live canvas renderer.
+Arcane v1 should use MCP as the agent integration surface, but the product protocol should be an Arcane-owned canvas document model: versioned JSON blocks, append-only events, comments, selection context, assets, and snapshots. Agents should mutate the canvas through typed MCP tools. Humans should see those mutations in a live canvas renderer.
 
-Do not make generated React, arbitrary HTML, or screenshots the canonical artifact. Vercel-style generative UI is useful as a rendering pattern: tool calls produce typed data, and the client maps that data to UI components. For Loomwright, the durable source of truth should be structured canvas blocks and events. React can render them, but React should not define them.
+Do not make generated React, arbitrary HTML, or screenshots the canonical artifact. Vercel-style generative UI is useful as a rendering pattern: tool calls produce typed data, and the client maps that data to UI components. For Arcane, the durable source of truth should be structured canvas blocks and events. React can render them, but React should not define them.
 
 This follows the source pattern:
 - MCP is an open standard for connecting AI applications to external systems and exposes tools, resources, and prompts through a JSON-RPC data layer. Source: https://modelcontextprotocol.io/docs/getting-started/intro and https://modelcontextprotocol.io/docs/learn/architecture
 - Paper.design proves the read/write canvas workflow: a local MCP server exposes the open design file, agents can inspect selections and write visible canvas changes, and the docs verify this by asking an agent to create a rectangle. Source: https://paper.design/docs/mcp
 - Vercel AI SDK generative UI maps model tool calls/results to React components, which is useful for the client experience but too runtime-specific to be the canonical protocol. Source: https://vercel.com/blog/ai-sdk-3-generative-ui and https://ai-sdk.dev/docs/ai-sdk-ui/generative-user-interfaces
-- Remote MCP and OAuth-style authorization are viable for hosted Loomwright, including Streamable HTTP and bearer-token flows. Source: https://modelcontextprotocol.io/docs/tutorials/security/authorization and https://blog.cloudflare.com/remote-model-context-protocol-servers-mcp/
+- Remote MCP and OAuth-style authorization are viable for hosted Arcane, including Streamable HTTP and bearer-token flows. Source: https://modelcontextprotocol.io/docs/tutorials/security/authorization and https://blog.cloudflare.com/remote-model-context-protocol-servers-mcp/
 - Untrusted HTML should be isolated with sandboxed frames and strict capabilities. Source: https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html and https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe
 
 ## Design Goals
@@ -27,11 +27,11 @@ The canvas protocol should be:
 
 ## Canonical Canvas Model
 
-Use a JSON document with a stable schema URI and monotonically increasing version. MCP has its own protocol version negotiation, including the `MCP-Protocol-Version` header for HTTP clients after initialization, but Loomwright still needs its own canvas schema version because the canvas document will evolve independently of MCP. Source: https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
+Use a JSON document with a stable schema URI and monotonically increasing version. MCP has its own protocol version negotiation, including the `MCP-Protocol-Version` header for HTTP clients after initialization, but Arcane still needs its own canvas schema version because the canvas document will evolve independently of MCP. Source: https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
 
 ```json
 {
-  "schema": "https://loomwright.dev/schemas/canvas/v1.json",
+  "schema": "https://arcane.dev/schemas/canvas/v1.json",
   "canvasId": "canv_01JZEXAMPLE",
   "version": 42,
   "title": "Checkout redesign",
@@ -158,7 +158,7 @@ Required event types:
 - `permission.changed`
 - `render_policy.changed`
 
-Events should be returned from write tools and exposed as an MCP resource. MCP supports notifications, and resources can be read by URI; Loomwright should use that shape for event polling/subscription rather than inventing per-agent webhooks first. Source: https://modelcontextprotocol.io/docs/learn/architecture and https://modelcontextprotocol.io/specification/2025-06-18/server/resources
+Events should be returned from write tools and exposed as an MCP resource. MCP supports notifications, and resources can be read by URI; Arcane should use that shape for event polling/subscription rather than inventing per-agent webhooks first. Source: https://modelcontextprotocol.io/docs/learn/architecture and https://modelcontextprotocol.io/specification/2025-06-18/server/resources
 
 ## Versioning and Concurrency
 
@@ -265,16 +265,16 @@ Use URI-addressable resources so clients can read context without invoking write
 
 | Resource URI | Purpose |
 | --- | --- |
-| `loomwright://canvases` | List canvases visible to the current token. |
-| `loomwright://canvases/{canvasId}/manifest` | Title, version, permissions, frame list, block count, latest snapshot. |
-| `loomwright://canvases/{canvasId}/snapshot/latest` | Latest compact canonical document. |
-| `loomwright://canvases/{canvasId}/snapshot/{version}` | Historical canonical document. |
-| `loomwright://canvases/{canvasId}/events?after={seq}` | Event stream page for incremental sync. |
-| `loomwright://canvases/{canvasId}/selection/current` | Current user's published selection context. |
-| `loomwright://canvases/{canvasId}/comments` | Open and recently resolved threads. |
-| `loomwright://canvases/{canvasId}/assets/{assetId}` | Asset metadata and signed/proxied fetch URL. |
-| `loomwright://schemas/canvas/v1` | JSON Schema for canvas documents and blocks. |
-| `loomwright://schemas/events/v1` | JSON Schema for event envelopes. |
+| `arcane://canvases` | List canvases visible to the current token. |
+| `arcane://canvases/{canvasId}/manifest` | Title, version, permissions, frame list, block count, latest snapshot. |
+| `arcane://canvases/{canvasId}/snapshot/latest` | Latest compact canonical document. |
+| `arcane://canvases/{canvasId}/snapshot/{version}` | Historical canonical document. |
+| `arcane://canvases/{canvasId}/events?after={seq}` | Event stream page for incremental sync. |
+| `arcane://canvases/{canvasId}/selection/current` | Current user's published selection context. |
+| `arcane://canvases/{canvasId}/comments` | Open and recently resolved threads. |
+| `arcane://canvases/{canvasId}/assets/{assetId}` | Asset metadata and signed/proxied fetch URL. |
+| `arcane://schemas/canvas/v1` | JSON Schema for canvas documents and blocks. |
+| `arcane://schemas/events/v1` | JSON Schema for event envelopes. |
 
 ### Read Tools
 
@@ -321,7 +321,7 @@ All write tools should return:
   "affectedBlockIds": ["blk_01JZEXAMPLE"],
   "warnings": [],
   "preview": {
-    "resourceUri": "loomwright://canvases/canv_01JZEXAMPLE/snapshot/43"
+    "resourceUri": "arcane://canvases/canv_01JZEXAMPLE/snapshot/43"
   }
 }
 ```
@@ -332,7 +332,7 @@ Prompts should make agents better at using the tools without requiring agent sou
 
 | Prompt | Purpose |
 | --- | --- |
-| `canvas_orientation` | Explain the available Loomwright tools, schema rules, and safe rendering ladder. |
+| `canvas_orientation` | Explain the available Arcane tools, schema rules, and safe rendering ladder. |
 | `canvas_edit_selected` | Use current selection as the edit target and ask clarifying questions only when needed. |
 | `canvas_wireframe_from_brief` | Create structured frames/stacks/text/shapes from a product brief. |
 | `canvas_review` | Inspect a canvas and create anchored comments for issues. |
@@ -344,9 +344,9 @@ Prompts should make agents better at using the tools without requiring agent sou
 
 Paper's MCP server is a strong product reference because it lets agents read and write a visual design file through common agent hosts including Codex, Claude Code, Cursor, Copilot, and OpenCode. It uses a local HTTP MCP endpoint and exposes tools for selection, node inspection, screenshots, JSX, exports, artboard creation, HTML writing, text updates, renames, and duplication. Source: https://paper.design/docs/mcp
 
-Loomwright should copy the workflow, not the exact data model.
+Arcane should copy the workflow, not the exact data model.
 
-| Paper pattern | Loomwright equivalent | Recommendation |
+| Paper pattern | Arcane equivalent | Recommendation |
 | --- | --- | --- |
 | Current open file is implicit context | Active canvas from token/session or explicit `canvasId` | Hosted needs explicit tenancy; local can infer active canvas. |
 | `get_selection` | `canvas_get_selection` | Make selection the default edit target. |
@@ -363,7 +363,7 @@ Use generative UI as the human-facing renderer and streaming interaction layer, 
 
 The Vercel AI SDK docs describe generative UI as connecting tool-call results to React components; the older AI SDK 3 announcement introduced streaming React Server Components from LLM/tool flows. Sources: https://ai-sdk.dev/docs/ai-sdk-ui/generative-user-interfaces and https://vercel.com/blog/ai-sdk-3-generative-ui
 
-For Loomwright:
+For Arcane:
 
 - Tool result cards in chat can be React components: "created 6 blocks", "3 validation warnings", "preview version 43".
 - The live canvas renderer can be React if the app is React, but it should render from `CanvasDocument` and events.
@@ -374,7 +374,7 @@ For Loomwright:
 
 ### Rendering Ladder
 
-1. Structured blocks: render with Loomwright-owned components. This is the default and should cover most product, diagram, document, and UI mockup work.
+1. Structured blocks: render with Arcane-owned components. This is the default and should cover most product, diagram, document, and UI mockup work.
 2. Safe Markdown subset: allowed inside `text` and `code` blocks after sanitization. No raw HTML.
 3. Sandboxed HTML: `html_sandbox` blocks load a stored HTML asset in an iframe on a separate origin with restrictive sandbox and CSP. Scripts are disabled by default.
 4. Allowlisted components: `component_ref` points to a pre-registered renderer component with pinned version and JSON-schema props.
@@ -426,7 +426,7 @@ The server should enforce:
 
 Build the smallest complete loop:
 
-1. `@loomwright/canvas-schema`: JSON Schema, TypeScript types, validators, migration stubs.
+1. `@arcane/canvas-schema`: JSON Schema, TypeScript types, validators, migration stubs.
 2. Evented store: snapshots plus append-only events with optimistic concurrency.
 3. MCP server: resources, read tools, narrow write tools, and prompt templates above.
 4. Web renderer: structured blocks first, event subscription/polling, selection publishing, comments.
