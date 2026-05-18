@@ -1,7 +1,67 @@
 # Arcane
 
-Agent-native generative UI canvas and MCP workspace.
+Agent-native chat + canvas workspace. V0 is deliberately tiny: a local web app with chat on the left, a live HTML artifact on the right, local session persistence, hot reload by refresh, and a tiny MCP-compatible tool surface for agents to create/update artifacts.
 
-Arcane turns static AI artifacts into living canvases: chat on one side, structured visual UI on the other, with agents able to create, patch, inspect, and share canvas blocks through MCP and gateway connectors.
+## V0 loop
 
-Status: research + architecture planning.
+1. Start Arcane on the agent machine.
+2. Open the local/tunneled URL.
+3. Create or resume a session.
+4. Chat in the left pane.
+5. Agent writes artifact files via HTTP or MCP tools.
+6. Canvas iframe updates by reopening/reloading the session.
+7. Session history and artifact state live under `.arcane/sessions/`.
+
+No annotation. No DOM selection. No doodles. No circus animals.
+
+## Run
+
+```bash
+npm install
+npm start
+# open http://127.0.0.1:8787
+```
+
+Optional local storage path:
+
+```bash
+ARCANE_HOME=/path/to/.arcane npm start
+```
+
+## MCP-ish stdio server
+
+```bash
+npm run mcp
+```
+
+Supported tools:
+
+- `arcane_create_session`
+- `arcane_list_sessions`
+- `arcane_get_session`
+- `arcane_write_file`
+- `arcane_read_file`
+- `arcane_list_files`
+- `arcane_append_message`
+- `arcane_create_snapshot`
+
+## HTTP API quick poke
+
+```bash
+# create session
+curl -s -X POST http://127.0.0.1:8787/api/sessions \
+  -H 'content-type: application/json' \
+  -d '{"title":"Demo"}'
+
+# write artifact
+curl -s -X PUT http://127.0.0.1:8787/api/sessions/$SESSION_ID/files/index.html \
+  -H 'content-type: application/json' \
+  -d '{"content":"<h1>Hello Arcane</h1>"}'
+```
+
+## Verify
+
+```bash
+npm test
+npm run build
+```
