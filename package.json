@@ -1,0 +1,1 @@
+{"name":"arcane","version":"0.0.1","private":true,"type":"module","scripts":{"test":"vitest run","build":"tsc -p tsconfig.json","start":"tsx src/server.ts","mcp":"tsx src/mcp-local.ts"},"dependencies":{"@types/node":"^20.12.12","tsx":"^4.19.2","typescript":"^5.6.3","vitest":"^2.1.8","express":"^4.21.2","@types/express":"^4.17.21"},"devDependencies":{}}
