@@ -1,6 +1,21 @@
 import express, { type Express } from 'express';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { SessionStore, type MessageRole } from './session-store.js';
+
+const execFileAsync = promisify(execFile);
+
+export interface AgentRequest {
+  sessionId: string;
+  content: string;
+  messages: Awaited<ReturnType<SessionStore['listMessages']>>;
+  files: string[];
+}
+
+export interface AgentBridge {
+  respond(request: AgentRequest): Promise<string>;
+}
 
 const STATIC_INDEX = `<!doctype html>
 <html>
@@ -93,7 +108,7 @@ const STATIC_INDEX = `<!doctype html>
         const content = contentEl.value.trim();
         if (!currentId || !content) return;
         contentEl.value = '';
-        await api('/api/sessions/' + currentId + '/messages', { method: 'POST', body: JSON.stringify({ role: 'user', content }) });
+        await api('/api/sessions/' + currentId + '/agent', { method: 'POST', body: JSON.stringify({ content }) });
         await loadSession(currentId);
       });
 
@@ -102,7 +117,7 @@ const STATIC_INDEX = `<!doctype html>
   </body>
 </html>`;
 
-export function createArcaneApp(store = new SessionStore(), agentWebhook = process.env.ARCANE_AGENT_WEBHOOK): Express {
+export function createArcaneApp(store = new SessionStore(), agentBridge: AgentBridge | null = createDefaultAgentBridge()): Express {
   const app = express();
   app.use(express.json({ limit: '5mb' }));
   app.use(express.text({ type: ['text/*', 'application/javascript', 'text/css', 'text/html'], limit: '5mb' }));
@@ -130,10 +145,27 @@ export function createArcaneApp(store = new SessionStore(), agentWebhook = proce
       const role = (req.body?.role || 'user') as MessageRole;
       const content = String(req.body?.content || '');
       const message = await store.appendMessage(req.params.sessionId, role, content);
-      if (agentWebhook && role === 'user') {
-        fetch(agentWebhook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: req.params.sessionId, message }) }).catch(() => undefined);
-      }
       res.status(201).json(message);
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/sessions/:sessionId/agent', async (req, res, next) => {
+    try {
+      if (!agentBridge) return res.status(503).json({ error: 'agent bridge is not configured' });
+      const session = await store.getSession(req.params.sessionId);
+      if (!session) return res.status(404).json({ error: 'session not found' });
+      const content = String(req.body?.content || '').trim();
+      if (!content) return res.status(400).json({ error: 'content is required' });
+
+      const user = await store.appendMessage(session.id, 'user', content);
+      const reply = await agentBridge.respond({
+        sessionId: session.id,
+        content,
+        messages: await store.listMessages(session.id),
+        files: await store.listFiles(session.id),
+      });
+      const assistant = await store.appendMessage(session.id, 'assistant', reply);
+      res.status(201).json({ user, assistant });
     } catch (error) { next(error); }
   });
 
@@ -163,6 +195,36 @@ export function createArcaneApp(store = new SessionStore(), agentWebhook = proce
   });
 
   return app;
+}
+
+export function createDefaultAgentBridge(): AgentBridge | null {
+  if (process.env.ARCANE_AGENT_DISABLED === '1') return null;
+  return {
+    async respond({ sessionId, content, messages, files }) {
+      const hermesBin = process.env.ARCANE_HERMES_BIN || 'hermes';
+      const timeout = Number(process.env.ARCANE_AGENT_TIMEOUT_MS || 120000);
+      const prompt = [
+        `You are responding inside Arcane session ${sessionId}.`,
+        'Arcane is a local chat+canvas app. If Arcane MCP tools are available, use them to update the session artifact files before replying.',
+        `Relevant artifact files: ${files.join(', ') || '(none)'}.`,
+        'Keep the final reply short and say what changed.',
+        '',
+        'Recent messages:',
+        ...messages.slice(-12).map((message) => `${message.role}: ${message.content}`),
+        '',
+        `Latest user request: ${content}`,
+      ].join('\n');
+
+      const { stdout, stderr } = await execFileAsync(hermesBin, ['chat', '--quiet', '-q', prompt], {
+        timeout,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, ARCANE_SESSION_ID: sessionId },
+      });
+      const text = stdout.trim() || stderr.trim();
+      if (!text) throw new Error('agent returned no response');
+      return text;
+    },
+  };
 }
 
 export async function main(): Promise<void> {

@@ -25,4 +25,26 @@ describe('Arcane web server', () => {
     expect(resumed.body.messages[0].content).toBe('draw it');
     expect(artifact.text).toContain('Visual plan');
   });
+
+  it('bridges a user message to an agent responder and stores the assistant reply', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-agent-'));
+    const store = new SessionStore(root);
+    const app = createArcaneApp(store, {
+      respond: async ({ sessionId, content }) => `session=${sessionId} heard=${content}`,
+    });
+
+    const created = await request(app).post('/api/sessions').send({ title: 'Agent demo' }).expect(201);
+    const sessionId = created.body.id;
+
+    const response = await request(app)
+      .post(`/api/sessions/${sessionId}/agent`)
+      .send({ content: 'make a tiny dashboard' })
+      .expect(201);
+
+    const resumed = await request(app).get(`/api/sessions/${sessionId}`).expect(200);
+
+    expect(response.body.assistant.content).toContain('heard=make a tiny dashboard');
+    expect(resumed.body.messages.map((m: any) => m.role)).toEqual(['user', 'assistant']);
+    expect(resumed.body.messages[1].content).toContain(`session=${sessionId}`);
+  });
 });

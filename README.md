@@ -28,7 +28,23 @@ Optional local storage path:
 ARCANE_HOME=/path/to/.arcane npm start
 ```
 
-## MCP-ish stdio server
+## Hermes chat bridge
+
+The web UI can call a local Hermes CLI process when you submit a message:
+
+```bash
+ARCANE_HOME=/root/arcane/.arcane npm start
+```
+
+By default it runs:
+
+```bash
+hermes chat --quiet -q "<Arcane session prompt>"
+```
+
+Disable the bridge with `ARCANE_AGENT_DISABLED=1`, or override the binary with `ARCANE_HERMES_BIN=/path/to/hermes`.
+
+## MCP stdio server
 
 ```bash
 npm run mcp
