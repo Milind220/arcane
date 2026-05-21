@@ -41,6 +41,44 @@ There is no hosted expiry service in this beta helper. Treat local links as vali
 
 If Arcane is unavailable, Hermes should show the printed start command and URL. If `cloudflared` is missing or no tunnel URL appears quickly, Hermes should show the printed `cloudflared tunnel --url http://127.0.0.1:<PORT>` command.
 
+## Agent Bridge Modes
+
+Arcane supports three agent modes:
+
+```bash
+# Default degraded mode: one-shot Hermes CLI call, final text only.
+ARCANE_HERMES_MODE=subprocess
+
+# Structured mode: run an adapter command that reads one JSON request on stdin
+# and writes newline-delimited Arcane run events on stdout.
+ARCANE_HERMES_MODE=event-stream
+ARCANE_HERMES_EVENT_BRIDGE="/path/to/hermes-arcane-adapter"
+
+# Disable agent execution for UI/dev smoke tests.
+ARCANE_HERMES_MODE=disabled
+# or
+ARCANE_AGENT_DISABLED=1
+```
+
+The event-stream adapter receives this JSON request on stdin:
+
+```json
+{"sessionId":"...","runId":"...","content":"...","messages":[],"files":[]}
+```
+
+It should emit one JSON object per line using Arcane's run event protocol, for example:
+
+```json
+{"type":"tool.call.started","toolCallId":"t1","name":"terminal","args":{"command":"npm test"}}
+{"type":"tool.call.completed","toolCallId":"t1","name":"terminal","resultPreview":"27 passed"}
+{"type":"assistant.message","content":"Tests passed."}
+{"type":"run.done"}
+```
+
+Arcane injects the active `sessionId` and `runId` if omitted, persists the events under the run, broadcasts them over SSE, and renders tool cards in the browser.
+
+`subprocess` mode remains a fallback and still calls `hermes chat --quiet -q`, so it cannot show live tool calls. Use `event-stream`/platform mode for real Hermes integration.
+
 ## Degraded Behavior
 
 When the current Hermes surface cannot render Arcane inline, show the URL as plain text and keep artifact references in the terminal or chat transcript. The user can open the URL in a browser while Hermes continues the text session.
