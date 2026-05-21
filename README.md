@@ -14,6 +14,11 @@ Agent-native chat + canvas workspace. V0 is deliberately tiny: a local web app w
 
 No annotation. No DOM selection. No doodles. No circus animals.
 
+## Plans
+
+- `docs/PERSONAL_HERMES_INTERFACE_PLAN.md` — personal Hermes-native Arcane roadmap: browser chat + visual artifacts + temporary links + resume + later selection-aware edits.
+- `docs/PLAN.md` — broader product/protocol research plan.
+
 ## Run
 
 ```bash
