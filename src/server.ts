@@ -1,11 +1,14 @@
-import express, { type Express } from 'express';
+import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { SessionStore, type MessageRole } from './session-store.js';
+import { SessionStore, type AgentRun, type ArcaneArtifactFile, type ArcaneMessage, type ArcaneSession, type MessageRole } from './session-store.js';
 
 const execFileAsync = promisify(execFile);
 const SAFE_AGENT_ERROR_MESSAGE = 'The agent run failed. Open debug details.';
+const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 export interface AgentRequest {
   sessionId: string;
@@ -22,148 +25,20 @@ export interface ArcaneAppOptions {
   accessToken?: string;
 }
 
-const STATIC_INDEX = `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Arcane</title>
-    <style>
-      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #080712; color: #f7f2ff; }
-      * { box-sizing: border-box; }
-      body { margin: 0; height: 100vh; overflow: hidden; }
-      header { height: 48px; display: flex; gap: 12px; align-items: center; padding: 0 16px; border-bottom: 1px solid #26213b; background: #100e1d; }
-      header strong { color: #d8b4fe; }
-      button, input, textarea, select { font: inherit; }
-      button { border: 1px solid #7c3aed; background: #6d28d9; color: white; border-radius: 10px; padding: 8px 12px; cursor: pointer; }
-      button.secondary { background: #17142a; border-color: #3b315b; }
-      main { height: calc(100vh - 48px); display: grid; grid-template-columns: 340px 1fr; }
-      aside { border-right: 1px solid #26213b; background: #0d0b18; display: grid; grid-template-rows: auto 1fr auto; min-width: 0; }
-      .sessions { display: flex; gap: 8px; padding: 10px; border-bottom: 1px solid #26213b; }
-      select { min-width: 0; flex: 1; border: 1px solid #3b315b; background: #17142a; color: #f7f2ff; border-radius: 10px; padding: 8px; }
-      .messages { padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
-      .message { border: 1px solid #2d2647; background: #151225; border-radius: 14px; padding: 10px; white-space: pre-wrap; }
-      .message.user { border-color: #7c3aed; }
-      .message.pending { opacity: 0.72; border-style: dashed; }
-      .message.error { border-color: #ef4444; color: #fecaca; }
-      .composer { padding: 10px; border-top: 1px solid #26213b; display: grid; gap: 8px; }
-      .composer button[disabled] { opacity: 0.55; cursor: wait; }
-      textarea { resize: none; height: 92px; border: 1px solid #3b315b; background: #17142a; color: #f7f2ff; border-radius: 12px; padding: 10px; }
-      iframe { width: 100%; height: 100%; border: 0; background: white; }
-      .empty { color: #a78bfa; padding: 12px; }
-      @media (max-width: 760px) {
-        body { overflow: auto; }
-        main { height: auto; min-height: calc(100vh - 48px); grid-template-columns: 1fr; grid-template-rows: minmax(56vh, auto) 44vh; }
-        aside { border-right: 0; border-bottom: 1px solid #26213b; min-height: 56vh; }
-      }
-    </style>
-  </head>
-  <body>
-    <header><strong>Arcane</strong><span>chat + canvas, no circus.</span><button id="snapshot" class="secondary">Snapshot</button></header>
-    <main>
-      <aside>
-        <div class="sessions"><select id="sessions"></select><button id="new">New</button></div>
-        <div id="messages" class="messages"><p class="empty">Pick or create a session.</p></div>
-        <form id="composer" class="composer"><textarea id="content" placeholder="Message the agent..."></textarea><button>Send</button></form>
-      </aside>
-      <iframe id="artifact" title="Arcane canvas"></iframe>
-    </main>
-    <script>
-      let currentId = null;
-      const accessToken = new URLSearchParams(location.search).get('token') || '';
-      const sessionsEl = document.querySelector('#sessions');
-      const messagesEl = document.querySelector('#messages');
-      const artifactEl = document.querySelector('#artifact');
-      const contentEl = document.querySelector('#content');
-      const sendButton = document.querySelector('#composer button');
+interface SessionPayload {
+  session: ArcaneSession;
+  messages: ArcaneMessage[];
+  files: string[];
+  artifactFiles: ArcaneArtifactFile[];
+  run: AgentRun | null;
+  runs: AgentRun[];
+}
 
-      async function api(path, options = {}) {
-        const headers = { 'content-type': 'application/json', ...(options.headers || {}) };
-        if (accessToken) headers['x-arcane-token'] = accessToken;
-        const res = await fetch(path, { ...options, headers });
-        if (!res.ok) throw new Error(await res.text());
-        if (res.status === 204) return null;
-        return res.json();
-      }
-
-      async function loadSessions(selectId) {
-        const sessions = await api('/api/sessions');
-        sessionsEl.innerHTML = sessions.map(s => '<option value="' + s.id + '">' + escapeHtml(s.title) + '</option>').join('');
-        if (sessions.length) await loadSession(selectId || sessions[0].id);
-      }
-
-      async function loadSession(id) {
-        currentId = id;
-        sessionsEl.value = id;
-        const data = await api('/api/sessions/' + id);
-        messagesEl.innerHTML = data.messages.length ? data.messages.map(renderMessage).join('') : '<p class="empty">No messages yet. Start the spell.</p>';
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-        const tokenParam = accessToken ? '&token=' + encodeURIComponent(accessToken) : '';
-        artifactEl.src = '/artifact/' + id + '/index.html?t=' + Date.now() + tokenParam;
-      }
-
-      function renderMessage(m) {
-        const classes = ['message', m.role, m.pending ? 'pending' : '', m.error ? 'error' : ''].filter(Boolean).join(' ');
-        return '<div class="' + classes + '"><strong>' + escapeHtml(m.role) + '</strong><br>' + escapeHtml(m.content) + '</div>';
-      }
-
-      function setBusy(isBusy) {
-        sendButton.disabled = isBusy;
-        contentEl.disabled = isBusy;
-        sendButton.textContent = isBusy ? 'Thinking…' : 'Send';
-      }
-
-      function appendTransient(message) {
-        if (messagesEl.querySelector('.empty')) messagesEl.innerHTML = '';
-        messagesEl.insertAdjacentHTML('beforeend', renderMessage(message));
-        messagesEl.scrollTop = messagesEl.scrollHeight;
-      }
-
-      function escapeHtml(value) {
-        return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-      }
-
-      sessionsEl.addEventListener('change', () => loadSession(sessionsEl.value));
-      document.querySelector('#new').addEventListener('click', async () => {
-        const title = prompt('Session title?', 'Untitled session') || 'Untitled session';
-        const session = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ title }) });
-        await loadSessions(session.id);
-      });
-      document.querySelector('#snapshot').addEventListener('click', async () => {
-        if (!currentId) return;
-        await api('/api/sessions/' + currentId + '/snapshots', { method: 'POST', body: JSON.stringify({ summary: 'manual snapshot' }) });
-        alert('Snapshot saved. Tiny time machine acquired.');
-      });
-      document.querySelector('#composer').addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const content = contentEl.value.trim();
-        if (!currentId || !content) return;
-        contentEl.value = '';
-        appendTransient({ role: 'user', content, pending: true });
-        appendTransient({ role: 'assistant', content: 'Thinking…', pending: true });
-        setBusy(true);
-        try {
-          const response = await fetch('/api/sessions/' + currentId + '/agent', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', ...(accessToken ? { 'x-arcane-token': accessToken } : {}) },
-            body: JSON.stringify({ content }),
-          });
-          if (!response.ok) {
-            const body = await response.json().catch(() => ({}));
-            if (!body.assistant) throw new Error(body.error || 'Agent request failed');
-          }
-        } catch (error) {
-          appendTransient({ role: 'assistant', content: 'Error: ' + error.message, error: true });
-        } finally {
-          setBusy(false);
-          await loadSession(currentId);
-        }
-      });
-
-      loadSessions();
-    </script>
-  </body>
-</html>`;
+type ArcaneSessionEvent =
+  | { type: 'message.appended'; sessionId: string; message: ArcaneMessage }
+  | { type: 'run.status'; sessionId: string; run: AgentRun; status: AgentRun['status'] }
+  | { type: 'artifact.changed'; sessionId: string; path: string; file?: ArcaneArtifactFile }
+  | { type: 'snapshot.created'; sessionId: string; snapshotId: string };
 
 export function createArcaneApp(
   store = new SessionStore(),
@@ -171,18 +46,25 @@ export function createArcaneApp(
   options: ArcaneAppOptions = {},
 ): Express {
   const app = express();
+  const eventBus = createSessionEventBus();
+
   app.use(express.json({ limit: '5mb' }));
   app.use(express.text({ type: ['text/*', 'application/javascript', 'text/css', 'text/html'], limit: '5mb' }));
 
   const accessToken = options.accessToken || process.env.ARCANE_ACCESS_TOKEN || '';
-  app.use((req, res, next) => {
-    if (!accessToken || (!req.path.startsWith('/api/') && !req.path.startsWith('/artifact/'))) return next();
-    const supplied = req.get('x-arcane-token') || String(req.query.token || '');
-    if (supplied === accessToken) return next();
-    return res.status(401).json({ error: 'unauthorized' });
+  app.use(async (req, res, next) => {
+    try {
+      if (!accessToken || (!req.path.startsWith('/api/') && !req.path.startsWith('/artifact/'))) return next();
+      const supplied = req.get('x-arcane-token') || String(req.query.token || '');
+      if (supplied === accessToken) return next();
+      if (req.path.startsWith('/artifact/') && await hasValidArtifactCookie(store, req)) return next();
+      return res.status(401).json({ error: 'unauthorized' });
+    } catch (error) { next(error); }
   });
 
-  app.get('/', (_req, res) => res.type('html').send(STATIC_INDEX));
+  app.get('/', sendPublicFile('index.html'));
+  app.get('/app.css', sendPublicFile('app.css'));
+  app.get('/app.js', sendPublicFile('app.js'));
 
   app.get('/api/sessions', async (_req, res, next) => {
     try { res.json(await store.listSessions()); } catch (error) { next(error); }
@@ -192,18 +74,36 @@ export function createArcaneApp(
     try { res.status(201).json(await store.createSession(req.body?.title, req.body?.hermes)); } catch (error) { next(error); }
   });
 
-  app.get('/api/sessions/:sessionId', async (req, res, next) => {
+  app.get('/api/sessions/:sessionId/events', async (req, res, next) => {
     try {
       const session = await store.getSession(req.params.sessionId);
       if (!session) return res.status(404).json({ error: 'session not found' });
-      const runs = await store.listRuns(session.id, 5);
-      res.json({
-        session,
-        messages: await store.listMessages(session.id),
-        files: await store.listFiles(session.id),
-        run: runs[0] || null,
-        runs,
-      });
+
+      res.status(200);
+      res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+      res.setHeader('cache-control', 'no-cache, no-transform');
+      res.setHeader('connection', 'keep-alive');
+      res.write(': connected\n\n');
+
+      const unsubscribe = eventBus.subscribe(session.id, res);
+      req.on('close', unsubscribe);
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/sessions/:sessionId', async (req, res, next) => {
+    try {
+      const payload = await buildSessionPayload(store, req.params.sessionId);
+      if (!payload) return res.status(404).json({ error: 'session not found' });
+      res.json(payload);
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/sessions/:sessionId/artifact-access', async (req, res, next) => {
+    try {
+      const session = await store.getSession(req.params.sessionId);
+      if (!session?.artifact?.viewToken) return res.status(404).json({ error: 'session not found' });
+      setArtifactAccessCookie(res, session);
+      res.status(204).end();
     } catch (error) { next(error); }
   });
 
@@ -212,6 +112,7 @@ export function createArcaneApp(
       const role = (req.body?.role || 'user') as MessageRole;
       const content = String(req.body?.content || '');
       const message = await store.appendMessage(req.params.sessionId, role, content);
+      eventBus.emit({ type: 'message.appended', sessionId: req.params.sessionId, message });
       res.status(201).json(message);
     } catch (error) { next(error); }
   });
@@ -224,8 +125,13 @@ export function createArcaneApp(
       if (!content) return res.status(400).json({ error: 'content is required' });
 
       const user = await store.appendMessage(session.id, 'user', content);
+      eventBus.emit({ type: 'message.appended', sessionId: session.id, message: user });
+
       const queued = await store.createRun(session.id, { status: 'queued', message: 'Agent run queued.' });
+      eventBus.emit({ type: 'run.status', sessionId: session.id, run: queued, status: queued.status });
+
       let run = await store.updateRun(session.id, queued.id, { status: 'thinking', message: 'Agent is thinking.' });
+      eventBus.emit({ type: 'run.status', sessionId: session.id, run, status: run.status });
 
       if (!agentBridge) {
         run = await store.updateRun(session.id, run.id, {
@@ -233,6 +139,7 @@ export function createArcaneApp(
           message: SAFE_AGENT_ERROR_MESSAGE,
           debug: { message: 'agent bridge is not configured' },
         });
+        eventBus.emit({ type: 'run.status', sessionId: session.id, run, status: run.status });
         return res.status(503).json({ message: SAFE_AGENT_ERROR_MESSAGE, error: SAFE_AGENT_ERROR_MESSAGE, user, run });
       }
 
@@ -244,7 +151,10 @@ export function createArcaneApp(
           files: await store.listFiles(session.id),
         });
         const assistant = await store.appendMessage(session.id, 'assistant', reply);
+        eventBus.emit({ type: 'message.appended', sessionId: session.id, message: assistant });
+
         run = await store.updateRun(session.id, run.id, { status: 'done', message: 'Agent run completed.' });
+        eventBus.emit({ type: 'run.status', sessionId: session.id, run, status: run.status });
         res.status(201).json({ user, assistant, run });
       } catch (error: any) {
         run = await store.updateRun(session.id, run.id, {
@@ -252,6 +162,7 @@ export function createArcaneApp(
           message: SAFE_AGENT_ERROR_MESSAGE,
           debug: serializeAgentError(error),
         });
+        eventBus.emit({ type: 'run.status', sessionId: session.id, run, status: run.status });
         res.status(502).json({ message: SAFE_AGENT_ERROR_MESSAGE, error: SAFE_AGENT_ERROR_MESSAGE, user, run });
       }
     } catch (error) { next(error); }
@@ -262,27 +173,212 @@ export function createArcaneApp(
       const filePath = (req.params as Record<string, string>)[0];
       const content = typeof req.body === 'string' ? req.body : String(req.body?.content || '');
       await store.writeFile(req.params.sessionId, filePath, content);
-      res.status(204).end();
+
+      const payload = await buildSessionPayload(store, req.params.sessionId);
+      if (!payload) return res.status(404).json({ error: 'session not found' });
+      const file = payload.artifactFiles.find((artifactFile) => artifactFile.path === filePath);
+      eventBus.emit({ type: 'artifact.changed', sessionId: req.params.sessionId, path: filePath, ...(file ? { file } : {}) });
+      res.status(200).json({ ...payload, file: file || null });
     } catch (error) { next(error); }
   });
 
   app.post('/api/sessions/:sessionId/snapshots', async (req, res, next) => {
-    try { res.status(201).json(await store.createSnapshot(req.params.sessionId, req.body?.summary || '')); } catch (error) { next(error); }
-  });
-
-  app.use('/artifact/:sessionId', async (req, res, next) => {
     try {
-      const session = await store.getSession(req.params.sessionId);
-      if (!session) return res.status(404).send('session not found');
-      express.static(store.artifactRoot(session.id), { extensions: ['html'] })(req, res, next);
+      const snapshot = await store.createSnapshot(req.params.sessionId, req.body?.summary || '');
+      const payload = await buildSessionPayload(store, req.params.sessionId);
+      if (!payload) return res.status(404).json({ error: 'session not found' });
+
+      eventBus.emit({ type: 'snapshot.created', sessionId: req.params.sessionId, snapshotId: snapshot.id });
+      res.status(201).json({ ...snapshot, snapshot, ...payload });
     } catch (error) { next(error); }
   });
 
-  app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  app.get(['/artifact/:sessionId', '/artifact/:sessionId/'], async (req, res, next) => {
+    try {
+      await sendArtifactFile(store, req.params.sessionId, 'index.html', res);
+    } catch (error) { next(error); }
+  });
+
+  app.get('/artifact/:sessionId/*', async (req, res, next) => {
+    try {
+      await sendArtifactFile(store, req.params.sessionId, (req.params as Record<string, string>)[0] || 'index.html', res);
+    } catch (error) { next(error); }
+  });
+
+  app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
     res.status(400).json({ error: error.message });
   });
 
   return app;
+}
+
+function sendPublicFile(fileName: 'index.html' | 'app.css' | 'app.js'): express.RequestHandler {
+  return async (_req, res, next) => {
+    try {
+      res.type(fileName).send(await readFile(path.join(PUBLIC_DIR, fileName)));
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+async function sendArtifactFile(store: SessionStore, sessionId: string, relativePath: string, res: Response): Promise<void> {
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    res.status(404).send('session not found');
+    return;
+  }
+
+  setArtifactSecurityHeaders(res);
+  const filePath = relativePath.endsWith('/') ? `${relativePath}index.html` : relativePath;
+  let artifactPath: string;
+  try {
+    artifactPath = resolveSafeArtifactPath(store.artifactRoot(session.id), filePath);
+  } catch {
+    res.status(400).send('invalid artifact path');
+    return;
+  }
+
+  try {
+    res.type(path.extname(artifactPath) || 'html').send(await readFile(artifactPath));
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+    if (path.extname(artifactPath)) {
+      res.status(404).send('artifact not found');
+      return;
+    }
+    try {
+      const htmlPath = resolveSafeArtifactPath(store.artifactRoot(session.id), `${filePath}.html`);
+      res.type('html').send(await readFile(htmlPath));
+    } catch (htmlError: any) {
+      if (htmlError?.code !== 'ENOENT') throw htmlError;
+      res.status(404).send('artifact not found');
+    }
+  }
+}
+
+async function hasValidArtifactCookie(store: SessionStore, req: Request): Promise<boolean> {
+  const match = /^\/artifact\/([^/]+)(?:\/|$)/.exec(req.path);
+  if (!match) return false;
+  try {
+    const session = await store.getSession(decodeURIComponent(match[1]));
+    if (!session?.artifact?.viewToken) return false;
+    const supplied = parseCookies(req.get('cookie') || '')[artifactCookieName(session.id)];
+    return supplied === session.artifact.viewToken;
+  } catch {
+    return false;
+  }
+}
+
+function setArtifactAccessCookie(res: Response, session: ArcaneSession): void {
+  if (!session.artifact?.viewToken) return;
+  res.cookie(artifactCookieName(session.id), session.artifact.viewToken, {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: `/artifact/${session.id}`,
+  });
+}
+
+function artifactCookieName(sessionId: string): string {
+  return `arcane_canvas_${sessionId}`;
+}
+
+function parseCookies(header: string): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index === -1) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (!key) continue;
+    try {
+      cookies[key] = decodeURIComponent(value);
+    } catch {
+      cookies[key] = value;
+    }
+  }
+  return cookies;
+}
+
+function setArtifactSecurityHeaders(res: Response): void {
+  res.setHeader(
+    'content-security-policy',
+    [
+      "default-src 'none'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "media-src 'self' data: blob:",
+      "connect-src 'none'",
+      "navigate-to 'none'",
+      "frame-ancestors 'self'",
+      "base-uri 'none'",
+      "form-action 'none'",
+    ].join('; '),
+  );
+  res.setHeader('x-content-type-options', 'nosniff');
+}
+
+function resolveSafeArtifactPath(root: string, relativePath: string): string {
+  if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('\\')) throw new Error('Invalid artifact path');
+  const parts = relativePath.split('/');
+  if (parts.some((part) => !part || part === '.' || part === '..' || part.startsWith('.'))) throw new Error('Invalid artifact path');
+  const base = path.resolve(root);
+  const resolved = path.resolve(base, relativePath);
+  if (!resolved.startsWith(base + path.sep) && resolved !== base) throw new Error('Invalid artifact path');
+  return resolved;
+}
+
+async function buildSessionPayload(store: SessionStore, sessionId: string): Promise<SessionPayload | null> {
+  const session = await store.getSession(sessionId);
+  if (!session) return null;
+  const runs = await store.listRuns(session.id, 5);
+  return {
+    session,
+    messages: await store.listMessages(session.id),
+    files: await store.listFiles(session.id),
+    artifactFiles: await store.listArtifactFileMetadata(session.id),
+    run: runs[0] || null,
+    runs,
+  };
+}
+
+function createSessionEventBus(): {
+  subscribe: (sessionId: string, response: Response) => () => void;
+  emit: (event: ArcaneSessionEvent) => void;
+} {
+  const clients = new Map<string, Set<Response>>();
+  return {
+    subscribe(sessionId, response) {
+      let sessionClients = clients.get(sessionId);
+      if (!sessionClients) {
+        sessionClients = new Set();
+        clients.set(sessionId, sessionClients);
+      }
+      sessionClients.add(response);
+      return () => {
+        sessionClients?.delete(response);
+        if (sessionClients?.size === 0) clients.delete(sessionId);
+      };
+    },
+    emit(event) {
+      const sessionClients = clients.get(event.sessionId);
+      if (!sessionClients?.size) return;
+      const chunk = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+      for (const response of [...sessionClients]) {
+        if (response.writableEnded) {
+          sessionClients.delete(response);
+          continue;
+        }
+        try {
+          response.write(chunk);
+        } catch {
+          sessionClients.delete(response);
+        }
+      }
+    },
+  };
 }
 
 function serializeAgentError(error: unknown): Record<string, unknown> {

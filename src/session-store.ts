@@ -18,6 +18,13 @@ export interface ArcaneArtifactMetadata {
   entrypoint: 'index.html' | string;
   files: string[];
   lastSnapshotId?: string | null;
+  viewToken?: string;
+}
+
+export interface ArcaneArtifactFile {
+  path: string;
+  size: number;
+  modifiedAt: string;
 }
 
 export interface ArcaneSession {
@@ -90,7 +97,7 @@ export class SessionStore {
       createdAt: now,
       updatedAt: now,
       ...(hermes ? { hermes } : {}),
-      artifact: { entrypoint: 'index.html', files: [...DEFAULT_ARTIFACT_FILES], lastSnapshotId: null },
+      artifact: { entrypoint: 'index.html', files: [...DEFAULT_ARTIFACT_FILES], lastSnapshotId: null, viewToken: randomUUID() },
     };
     await mkdir(this.sessionDir(session.id), { recursive: true });
     await mkdir(this.artifactDir(session.id), { recursive: true });
@@ -110,7 +117,13 @@ export class SessionStore {
     const sessions = await Promise.all(
       entries
         .filter((entry) => entry.isDirectory())
-        .map(async (entry) => this.getSession(entry.name)),
+        .map(async (entry) => {
+          try {
+            return await this.getSession(entry.name);
+          } catch {
+            return null;
+          }
+        }),
     );
     return sessions
       .filter((session): session is ArcaneSession => Boolean(session))
@@ -118,8 +131,13 @@ export class SessionStore {
   }
 
   async getSession(id: string): Promise<ArcaneSession | null> {
+    this.assertValidSessionId(id);
     try {
-      return JSON.parse(await readFile(this.sessionPath(id), 'utf8')) as ArcaneSession;
+      const session = JSON.parse(await readFile(this.sessionPath(id), 'utf8')) as ArcaneSession;
+      if (session.id !== id) throw new Error('Session id mismatch');
+      const normalized = this.withArtifactViewToken(session);
+      if (normalized !== session) await this.writeSession(normalized);
+      return normalized;
     } catch (error: any) {
       if (error?.code === 'ENOENT') return null;
       throw error;
@@ -151,6 +169,17 @@ export class SessionStore {
   async listFiles(sessionId: string): Promise<string[]> {
     await this.requireSession(sessionId);
     return this.listArtifactFiles(sessionId);
+  }
+
+  async listArtifactFileMetadata(sessionId: string): Promise<ArcaneArtifactFile[]> {
+    await this.requireSession(sessionId);
+    const files = await Promise.all(
+      (await this.listArtifactFiles(sessionId)).map(async (filePath) => {
+        const info = await stat(this.safeArtifactPath(sessionId, filePath));
+        return { path: filePath, size: info.size, modifiedAt: info.mtime.toISOString() };
+      }),
+    );
+    return files.sort((a, b) => a.path.localeCompare(b.path));
   }
 
   async createRun(
@@ -230,21 +259,19 @@ export class SessionStore {
       }
       return out;
     };
-    return walk(this.artifactDir(sessionId));
+    return (await walk(this.artifactDir(sessionId))).sort((a, b) => a.localeCompare(b));
   }
 
   async writeFile(sessionId: string, relativePath: string, content: string): Promise<void> {
-    const session = await this.getSession(sessionId);
+    const session = await this.requireSession(sessionId);
     const fullPath = this.safeArtifactPath(sessionId, relativePath);
     await mkdir(path.dirname(fullPath), { recursive: true });
     await writeFile(fullPath, content, 'utf8');
-    if (session) {
-      await this.writeSession({
-        ...session,
-        artifact: await this.refreshArtifactMetadata(session.id, session.artifact),
-        updatedAt: new Date().toISOString(),
-      });
-    }
+    await this.writeSession({
+      ...session,
+      artifact: await this.refreshArtifactMetadata(session.id, session.artifact),
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   async readFile(sessionId: string, relativePath: string): Promise<string> {
@@ -310,6 +337,7 @@ export class SessionStore {
   }
 
   private runPath(sessionId: string, runId: string): string {
+    this.assertValidSessionId(sessionId);
     if (!runId || path.isAbsolute(runId) || runId.includes('/') || runId.includes('\\')) {
       throw new Error('Invalid run id');
     }
@@ -317,6 +345,7 @@ export class SessionStore {
   }
 
   private async writeSession(session: ArcaneSession): Promise<void> {
+    this.assertValidSessionId(session.id);
     await mkdir(this.sessionDir(session.id), { recursive: true });
     await writeFile(this.sessionPath(session.id), JSON.stringify(session, null, 2), 'utf8');
   }
@@ -339,6 +368,7 @@ export class SessionStore {
       entrypoint: current?.entrypoint || 'index.html',
       files: await this.listArtifactFiles(sessionId),
       lastSnapshotId,
+      viewToken: current?.viewToken || randomUUID(),
     };
   }
 
@@ -349,11 +379,36 @@ export class SessionStore {
   }
 
   private safeArtifactPath(sessionId: string, relativePath: string): string {
+    this.assertValidSessionId(sessionId);
     if (!relativePath || path.isAbsolute(relativePath)) throw new Error('Invalid artifact path');
+    if (relativePath.includes('\\')) throw new Error('Invalid artifact path');
+    const parts = relativePath.split('/');
+    if (parts.some((part) => !part || part === '.' || part === '..' || part.startsWith('.'))) {
+      throw new Error('Invalid artifact path');
+    }
     const base = path.resolve(this.artifactDir(sessionId));
     const resolved = path.resolve(base, relativePath);
     if (!resolved.startsWith(base + path.sep) && resolved !== base) throw new Error('Invalid artifact path');
     return resolved;
+  }
+
+  private withArtifactViewToken(session: ArcaneSession): ArcaneSession {
+    if (!session.artifact || session.artifact.viewToken) return session;
+    return {
+      ...session,
+      artifact: {
+        entrypoint: session.artifact?.entrypoint || 'index.html',
+        files: session.artifact?.files || [],
+        lastSnapshotId: session.artifact?.lastSnapshotId ?? null,
+        viewToken: randomUUID(),
+      },
+    };
+  }
+
+  private assertValidSessionId(sessionId: string): void {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(sessionId)) {
+      throw new Error('Invalid session id');
+    }
   }
 }
 

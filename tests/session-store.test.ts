@@ -112,11 +112,22 @@ describe('SessionStore', () => {
     expect(snapshotCss).toContain('hotpink');
   });
 
-  it('rejects path traversal in artifact files', async () => {
+  it('ignores stray invalid session directories while listing sessions', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
+    const store = new SessionStore(root);
+    const session = await store.createSession('Valid');
+    await mkdir(path.join(root, 'sessions', '..bad'), { recursive: true });
+
+    await expect(store.listSessions()).resolves.toEqual([expect.objectContaining({ id: session.id, title: 'Valid' })]);
+  });
+
+  it('rejects unsafe artifact file paths', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
     const store = new SessionStore(root);
     const session = await store.createSession('Safety');
 
     await expect(store.writeFile(session.id, '../evil.txt', 'nope')).rejects.toThrow(/invalid artifact path/i);
+    await expect(store.writeFile(session.id, '.env', 'nope')).rejects.toThrow(/invalid artifact path/i);
+    await expect(store.writeFile(session.id, 'nested/../evil.txt', 'nope')).rejects.toThrow(/invalid artifact path/i);
   });
 });

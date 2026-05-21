@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Arcane</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <strong>Arcane</strong>
+        <span>beta</span>
+      </div>
+      <div id="run-status" class="status-pill status-idle">idle</div>
+      <div class="top-actions">
+        <button id="reload-canvas" type="button" class="secondary">Reload canvas</button>
+        <button id="snapshot" type="button">Snapshot</button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <aside class="chat-pane">
+        <div class="session-bar">
+          <select id="sessions" aria-label="Sessions"></select>
+          <button id="new-session" type="button">New</button>
+        </div>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="composer" class="composer">
+          <textarea id="content" placeholder="Message the agent"></textarea>
+          <button id="send" type="submit">Send</button>
+        </form>
+      </aside>
+
+      <section class="work-pane">
+        <div class="work-header">
+          <div>
+            <div id="session-title" class="session-title">No session</div>
+            <div id="event-state" class="event-state">not connected</div>
+          </div>
+        </div>
+
+        <div class="artifact-layout">
+          <section class="canvas-panel">
+            <iframe id="artifact" title="Arcane artifact canvas" sandbox="allow-scripts allow-forms" referrerpolicy="no-referrer"></iframe>
+          </section>
+
+          <aside class="inspector">
+            <section class="run-panel">
+              <h2>Run</h2>
+              <p id="run-message" class="run-message">No run yet.</p>
+              <details id="debug-drawer" class="debug-drawer">
+                <summary>Debug details</summary>
+                <pre id="debug-json"></pre>
+              </details>
+            </section>
+
+            <section class="file-panel">
+              <div class="panel-heading">
+                <h2>Artifact files</h2>
+                <span id="file-count">0</span>
+              </div>
+              <div id="files" class="files"></div>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
