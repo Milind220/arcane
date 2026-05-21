@@ -11,7 +11,7 @@ export interface JsonRpcRequest {
 }
 
 const toolDescriptions = [
-  { name: 'arcane_create_session', description: 'Create a resumable Arcane chat+canvas session.', inputSchema: { type: 'object', properties: { title: { type: 'string' } } } },
+  { name: 'arcane_create_session', description: 'Create a resumable Arcane chat+canvas session.', inputSchema: { type: 'object', properties: { title: { type: 'string' }, hermes: { type: 'object' } } } },
   { name: 'arcane_list_sessions', description: 'List local Arcane sessions newest first.', inputSchema: { type: 'object', properties: {} } },
   { name: 'arcane_get_session', description: 'Get session metadata, messages, and files.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'] } },
   { name: 'arcane_write_file', description: 'Write an artifact file inside a session.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, path: { type: 'string' }, content: { type: 'string' } }, required: ['sessionId', 'path', 'content'] } },
@@ -49,13 +49,18 @@ export async function handleMcpRequest(store: SessionStore, request: JsonRpcRequ
 async function callTool(store: SessionStore, name: string, args: any): Promise<any> {
   switch (name) {
     case 'arcane_create_session':
-      return store.createSession(args.title || 'Untitled session');
+      return store.createSession(args.title || 'Untitled session', args.hermes);
     case 'arcane_list_sessions':
       return store.listSessions();
     case 'arcane_get_session': {
       const session = await store.getSession(args.sessionId);
       if (!session) throw new Error('session not found');
-      return { session, messages: await store.listMessages(args.sessionId), files: await store.listFiles(args.sessionId) };
+      return {
+        session,
+        messages: await store.listMessages(args.sessionId),
+        files: await store.listFiles(args.sessionId),
+        runs: await store.listRuns(args.sessionId, 5),
+      };
     }
     case 'arcane_write_file':
       await store.writeFile(args.sessionId, args.path, args.content || '');

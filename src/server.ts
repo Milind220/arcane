@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { SessionStore, type MessageRole } from './session-store.js';
 
 const execFileAsync = promisify(execFile);
+const SAFE_AGENT_ERROR_MESSAGE = 'The agent run failed. Open debug details.';
 
 export interface AgentRequest {
   sessionId: string;
@@ -188,14 +189,21 @@ export function createArcaneApp(
   });
 
   app.post('/api/sessions', async (req, res, next) => {
-    try { res.status(201).json(await store.createSession(req.body?.title)); } catch (error) { next(error); }
+    try { res.status(201).json(await store.createSession(req.body?.title, req.body?.hermes)); } catch (error) { next(error); }
   });
 
   app.get('/api/sessions/:sessionId', async (req, res, next) => {
     try {
       const session = await store.getSession(req.params.sessionId);
       if (!session) return res.status(404).json({ error: 'session not found' });
-      res.json({ session, messages: await store.listMessages(session.id), files: await store.listFiles(session.id) });
+      const runs = await store.listRuns(session.id, 5);
+      res.json({
+        session,
+        messages: await store.listMessages(session.id),
+        files: await store.listFiles(session.id),
+        run: runs[0] || null,
+        runs,
+      });
     } catch (error) { next(error); }
   });
 
@@ -210,13 +218,24 @@ export function createArcaneApp(
 
   app.post('/api/sessions/:sessionId/agent', async (req, res, next) => {
     try {
-      if (!agentBridge) return res.status(503).json({ error: 'agent bridge is not configured' });
       const session = await store.getSession(req.params.sessionId);
       if (!session) return res.status(404).json({ error: 'session not found' });
       const content = String(req.body?.content || '').trim();
       if (!content) return res.status(400).json({ error: 'content is required' });
 
       const user = await store.appendMessage(session.id, 'user', content);
+      const queued = await store.createRun(session.id, { status: 'queued', message: 'Agent run queued.' });
+      let run = await store.updateRun(session.id, queued.id, { status: 'thinking', message: 'Agent is thinking.' });
+
+      if (!agentBridge) {
+        run = await store.updateRun(session.id, run.id, {
+          status: 'error',
+          message: SAFE_AGENT_ERROR_MESSAGE,
+          debug: { message: 'agent bridge is not configured' },
+        });
+        return res.status(503).json({ message: SAFE_AGENT_ERROR_MESSAGE, error: SAFE_AGENT_ERROR_MESSAGE, user, run });
+      }
+
       try {
         const reply = await agentBridge.respond({
           sessionId: session.id,
@@ -225,14 +244,15 @@ export function createArcaneApp(
           files: await store.listFiles(session.id),
         });
         const assistant = await store.appendMessage(session.id, 'assistant', reply);
-        res.status(201).json({ user, assistant });
+        run = await store.updateRun(session.id, run.id, { status: 'done', message: 'Agent run completed.' });
+        res.status(201).json({ user, assistant, run });
       } catch (error: any) {
-        const assistant = await store.appendMessage(
-          session.id,
-          'assistant',
-          `Agent bridge failed: ${error?.message || String(error)}`,
-        );
-        res.status(502).json({ user, assistant, error: assistant.content });
+        run = await store.updateRun(session.id, run.id, {
+          status: 'error',
+          message: SAFE_AGENT_ERROR_MESSAGE,
+          debug: serializeAgentError(error),
+        });
+        res.status(502).json({ message: SAFE_AGENT_ERROR_MESSAGE, error: SAFE_AGENT_ERROR_MESSAGE, user, run });
       }
     } catch (error) { next(error); }
   });
@@ -263,6 +283,29 @@ export function createArcaneApp(
   });
 
   return app;
+}
+
+function serializeAgentError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    const debug: Record<string, unknown> = {
+      name: error.name,
+      message: error.message,
+    };
+    if (error.stack) debug.stack = error.stack;
+    for (const key of ['code', 'signal', 'stdout', 'stderr', 'cmd', 'killed']) {
+      const value = (error as unknown as Record<string, unknown>)[key];
+      if (value !== undefined) debug[key] = value;
+    }
+    return debug;
+  }
+
+  if (typeof error === 'string') return { message: error };
+
+  try {
+    return { message: JSON.stringify(error) || String(error) };
+  } catch {
+    return { message: String(error) };
+  }
 }
 
 export function createDefaultAgentBridge(): AgentBridge | null {

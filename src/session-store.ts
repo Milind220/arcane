@@ -4,11 +4,29 @@ import { randomUUID } from 'node:crypto';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
+export type AgentRunStatus = 'queued' | 'thinking' | 'editing' | 'done' | 'error';
+
+export interface ArcaneHermesMetadata {
+  profile?: string;
+  sessionId?: string;
+  source?: string;
+  origin?: 'cli' | 'telegram' | 'arcane' | string;
+  originThread?: string | null;
+}
+
+export interface ArcaneArtifactMetadata {
+  entrypoint: 'index.html' | string;
+  files: string[];
+  lastSnapshotId?: string | null;
+}
+
 export interface ArcaneSession {
   id: string;
   title: string;
   createdAt: string;
   updatedAt: string;
+  hermes?: ArcaneHermesMetadata;
+  artifact?: ArcaneArtifactMetadata;
 }
 
 export interface ArcaneMessage {
@@ -22,6 +40,16 @@ export interface ArcaneSnapshot {
   id: string;
   summary: string;
   createdAt: string;
+}
+
+export interface AgentRun {
+  id: string;
+  sessionId: string;
+  status: AgentRunStatus;
+  createdAt: string;
+  updatedAt: string;
+  message: string;
+  debug?: Record<string, unknown>;
 }
 
 const DEFAULT_HTML = `<!doctype html>
@@ -49,20 +77,30 @@ body { margin: 0; min-height: 100vh; background: #09090f; color: #f5f3ff; }
 
 const DEFAULT_JS = `console.log('Arcane artifact loaded');\n`;
 
+const DEFAULT_ARTIFACT_FILES = ['index.html', 'styles.css', 'script.js'];
+
 export class SessionStore {
   constructor(private readonly rootDir: string = path.join(process.cwd(), '.arcane')) {}
 
-  async createSession(title = 'Untitled session'): Promise<ArcaneSession> {
+  async createSession(title = 'Untitled session', hermes?: ArcaneHermesMetadata): Promise<ArcaneSession> {
     const now = new Date().toISOString();
-    const session: ArcaneSession = { id: randomUUID(), title, createdAt: now, updatedAt: now };
+    const session: ArcaneSession = {
+      id: randomUUID(),
+      title,
+      createdAt: now,
+      updatedAt: now,
+      ...(hermes ? { hermes } : {}),
+      artifact: { entrypoint: 'index.html', files: [...DEFAULT_ARTIFACT_FILES], lastSnapshotId: null },
+    };
     await mkdir(this.sessionDir(session.id), { recursive: true });
     await mkdir(this.artifactDir(session.id), { recursive: true });
     await mkdir(this.snapshotsDir(session.id), { recursive: true });
+    await mkdir(this.runsDir(session.id), { recursive: true });
     await this.writeSession(session);
     await writeFile(this.messagePath(session.id), '', 'utf8');
-    await this.writeFile(session.id, 'index.html', DEFAULT_HTML);
-    await this.writeFile(session.id, 'styles.css', DEFAULT_CSS);
-    await this.writeFile(session.id, 'script.js', DEFAULT_JS);
+    await writeFile(path.join(this.artifactDir(session.id), 'index.html'), DEFAULT_HTML, 'utf8');
+    await writeFile(path.join(this.artifactDir(session.id), 'styles.css'), DEFAULT_CSS, 'utf8');
+    await writeFile(path.join(this.artifactDir(session.id), 'script.js'), DEFAULT_JS, 'utf8');
     return session;
   }
 
@@ -98,7 +136,12 @@ export class SessionStore {
 
   async listMessages(sessionId: string): Promise<ArcaneMessage[]> {
     await this.requireSession(sessionId);
-    const raw = await readFile(this.messagePath(sessionId), 'utf8');
+    let raw = '';
+    try {
+      raw = await readFile(this.messagePath(sessionId), 'utf8');
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
     return raw
       .split('\n')
       .filter(Boolean)
@@ -107,6 +150,75 @@ export class SessionStore {
 
   async listFiles(sessionId: string): Promise<string[]> {
     await this.requireSession(sessionId);
+    return this.listArtifactFiles(sessionId);
+  }
+
+  async createRun(
+    sessionId: string,
+    input: { status: AgentRunStatus; message: string; debug?: Record<string, unknown> },
+  ): Promise<AgentRun> {
+    const session = await this.requireSession(sessionId);
+    const now = new Date().toISOString();
+    const run: AgentRun = {
+      id: randomUUID(),
+      sessionId,
+      status: input.status,
+      createdAt: now,
+      updatedAt: now,
+      message: input.message,
+      ...(input.debug ? { debug: input.debug } : {}),
+    };
+    await mkdir(this.runsDir(sessionId), { recursive: true });
+    await this.writeRun(run);
+    await this.writeSession({ ...session, updatedAt: now });
+    return run;
+  }
+
+  async updateRun(
+    sessionId: string,
+    runId: string,
+    input: { status?: AgentRunStatus; message?: string; debug?: Record<string, unknown> },
+  ): Promise<AgentRun> {
+    const session = await this.requireSession(sessionId);
+    const current = await this.readRun(sessionId, runId);
+    const now = new Date().toISOString();
+    const run: AgentRun = {
+      ...current,
+      status: input.status ?? current.status,
+      message: input.message ?? current.message,
+      updatedAt: now,
+      ...(input.debug !== undefined ? { debug: input.debug } : {}),
+    };
+    await this.writeRun(run);
+    await this.writeSession({ ...session, updatedAt: now });
+    return run;
+  }
+
+  async listRuns(sessionId: string, limit = 20): Promise<AgentRun[]> {
+    await this.requireSession(sessionId);
+    let entries;
+    try {
+      entries = await readdir(this.runsDir(sessionId), { withFileTypes: true });
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+    const runs = await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+        .map(async (entry) => JSON.parse(await readFile(path.join(this.runsDir(sessionId), entry.name), 'utf8')) as AgentRun),
+    );
+    return runs
+      .filter((run) => run.sessionId === sessionId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt))
+      .slice(0, limit);
+  }
+
+  async getLatestRun(sessionId: string): Promise<AgentRun | null> {
+    return (await this.listRuns(sessionId, 1))[0] || null;
+  }
+
+  private async listArtifactFiles(sessionId: string): Promise<string[]> {
     const walk = async (dir: string, prefix = ''): Promise<string[]> => {
       const entries = await readdir(dir, { withFileTypes: true });
       const out: string[] = [];
@@ -126,7 +238,13 @@ export class SessionStore {
     const fullPath = this.safeArtifactPath(sessionId, relativePath);
     await mkdir(path.dirname(fullPath), { recursive: true });
     await writeFile(fullPath, content, 'utf8');
-    if (session) await this.writeSession({ ...session, updatedAt: new Date().toISOString() });
+    if (session) {
+      await this.writeSession({
+        ...session,
+        artifact: await this.refreshArtifactMetadata(session.id, session.artifact),
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
 
   async readFile(sessionId: string, relativePath: string): Promise<string> {
@@ -135,12 +253,17 @@ export class SessionStore {
   }
 
   async createSnapshot(sessionId: string, summary = ''): Promise<ArcaneSnapshot> {
-    await this.requireSession(sessionId);
+    const session = await this.requireSession(sessionId);
     const snapshot: ArcaneSnapshot = { id: randomUUID(), summary, createdAt: new Date().toISOString() };
     const target = path.join(this.snapshotsDir(sessionId), snapshot.id);
     await mkdir(target, { recursive: true });
     await cp(this.artifactDir(sessionId), path.join(target, 'artifact'), { recursive: true });
     await writeFile(path.join(target, 'snapshot.json'), JSON.stringify(snapshot, null, 2), 'utf8');
+    await this.writeSession({
+      ...session,
+      artifact: await this.refreshArtifactMetadata(sessionId, session.artifact, snapshot.id),
+      updatedAt: snapshot.createdAt,
+    });
     return snapshot;
   }
 
@@ -182,9 +305,41 @@ export class SessionStore {
     return path.join(this.sessionDir(sessionId), 'snapshots');
   }
 
+  private runsDir(sessionId: string): string {
+    return path.join(this.sessionDir(sessionId), 'runs');
+  }
+
+  private runPath(sessionId: string, runId: string): string {
+    if (!runId || path.isAbsolute(runId) || runId.includes('/') || runId.includes('\\')) {
+      throw new Error('Invalid run id');
+    }
+    return path.join(this.runsDir(sessionId), `${runId}.json`);
+  }
+
   private async writeSession(session: ArcaneSession): Promise<void> {
     await mkdir(this.sessionDir(session.id), { recursive: true });
     await writeFile(this.sessionPath(session.id), JSON.stringify(session, null, 2), 'utf8');
+  }
+
+  private async readRun(sessionId: string, runId: string): Promise<AgentRun> {
+    return JSON.parse(await readFile(this.runPath(sessionId, runId), 'utf8')) as AgentRun;
+  }
+
+  private async writeRun(run: AgentRun): Promise<void> {
+    await mkdir(this.runsDir(run.sessionId), { recursive: true });
+    await writeFile(this.runPath(run.sessionId, run.id), JSON.stringify(run, null, 2), 'utf8');
+  }
+
+  private async refreshArtifactMetadata(
+    sessionId: string,
+    current?: ArcaneArtifactMetadata,
+    lastSnapshotId: string | null | undefined = current?.lastSnapshotId ?? null,
+  ): Promise<ArcaneArtifactMetadata> {
+    return {
+      entrypoint: current?.entrypoint || 'index.html',
+      files: await this.listArtifactFiles(sessionId),
+      lastSnapshotId,
+    };
   }
 
   private async requireSession(sessionId: string): Promise<ArcaneSession> {

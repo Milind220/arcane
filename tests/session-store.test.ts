@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SessionStore } from '../src/session-store.js';
@@ -25,6 +25,74 @@ describe('SessionStore', () => {
     expect(defaultHtml).toContain('src="script.js"');
     expect(defaultHtml).not.toContain('href="/styles.css"');
     expect(html).toContain('Hello Arcane');
+  });
+
+  it('creates sessions with optional Hermes metadata and artifact metadata', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
+    const store = new SessionStore(root);
+
+    const session = await store.createSession('Linked session', {
+      profile: 'default',
+      sessionId: 'hermes-123',
+      source: 'arcane',
+      origin: 'telegram',
+      originThread: 'topic-42',
+    });
+
+    const resumed = await store.getSession(session.id);
+
+    expect(resumed?.hermes).toEqual({
+      profile: 'default',
+      sessionId: 'hermes-123',
+      source: 'arcane',
+      origin: 'telegram',
+      originThread: 'topic-42',
+    });
+    expect(resumed?.artifact).toMatchObject({
+      entrypoint: 'index.html',
+      files: expect.arrayContaining(['index.html', 'styles.css', 'script.js']),
+      lastSnapshotId: null,
+    });
+  });
+
+  it('loads old session JSON without Hermes or artifact metadata', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
+    const sessionDir = path.join(root, 'sessions', 'legacy-session');
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      path.join(sessionDir, 'session.json'),
+      JSON.stringify({
+        id: 'legacy-session',
+        title: 'Legacy',
+        createdAt: '2026-05-21T00:00:00.000Z',
+        updatedAt: '2026-05-21T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+
+    const store = new SessionStore(root);
+    const session = await store.getSession('legacy-session');
+
+    expect(session).toMatchObject({ id: 'legacy-session', title: 'Legacy' });
+    expect(session?.hermes).toBeUndefined();
+    expect(session?.artifact).toBeUndefined();
+  });
+
+  it('creates, updates, and lists the latest run', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
+    const store = new SessionStore(root);
+    const session = await store.createSession('Runs');
+
+    const queued = await store.createRun(session.id, { status: 'queued', message: 'Queued.' });
+    const thinking = await store.updateRun(session.id, queued.id, { status: 'thinking', message: 'Thinking.' });
+    const done = await store.updateRun(session.id, queued.id, { status: 'done', message: 'Done.' });
+    const runs = await store.listRuns(session.id);
+    const latest = await store.getLatestRun(session.id);
+
+    expect(thinking.updatedAt >= queued.updatedAt).toBe(true);
+    expect(done).toMatchObject({ id: queued.id, sessionId: session.id, status: 'done', message: 'Done.' });
+    expect(runs).toHaveLength(1);
+    expect(latest).toMatchObject({ id: queued.id, status: 'done' });
   });
 
   it('lists sessions newest first and snapshots artifact state', async () => {
