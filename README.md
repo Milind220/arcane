@@ -33,6 +33,30 @@ Optional local storage path:
 ARCANE_HOME=/path/to/.arcane npm start
 ```
 
+## Open link helper
+
+For internal beta use, the link helper creates or reuses `.arcane/access-token`, probes Arcane, and prints a browser URL that includes the token:
+
+```bash
+npm run link
+```
+
+If Arcane is not running, it prints the exact `ARCANE_HOME`, `ARCANE_ACCESS_TOKEN`, and `PORT` command to start it. Run that command in another terminal, then create a session link when needed. If Arcane is already running without access-token enforcement, the helper refuses to create/share links and does not emit the `Arcane URL:` contract line. Decorative tokens are for costume jewelry, not public tunnels.
+
+```bash
+npm run link -- --create-session --title "Smoke"
+```
+
+Hermes can pass simple metadata into created sessions with `HERMES_PROFILE`, `HERMES_SESSION_ID`, `HERMES_SOURCE`, `HERMES_ORIGIN`, and `HERMES_THREAD_ID`.
+
+To create a temporary Cloudflare tunnel URL:
+
+```bash
+npm run link -- --tunnel
+```
+
+This requires `cloudflared` on `PATH`; otherwise the helper prints the exact `cloudflared tunnel --url ...` command to run manually. When a tunnel starts, the helper prints the stop command too. Use it. Public tunnels are not houseplants.
+
 ## Hermes chat bridge
 
 The web UI can call a local Hermes CLI process when you submit a message:
@@ -57,6 +81,8 @@ If exposing Arcane through a tunnel, set an access token. The root UI stays load
 ARCANE_ACCESS_TOKEN=$(openssl rand -hex 16) npm start
 # open/share http://127.0.0.1:8787/?token=$ARCANE_ACCESS_TOKEN
 ```
+
+The link helper above is the preferred way to produce an internal test URL because it always includes a token.
 
 Without this, a public tunnel can trigger the local Hermes bridge. That is funny only if your threat model is a potato.
 
