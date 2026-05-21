@@ -113,6 +113,12 @@ textarea:disabled {
   color: #ffb4b4;
 }
 
+.status-cancelled {
+  border-color: #575f68;
+  background: #191d22;
+  color: #bac4ce;
+}
+
 .app-shell {
   height: calc(100vh - 52px);
   display: grid;
@@ -184,6 +190,16 @@ select {
 .message.assistant {
   border-color: #39424d;
   background: #171d24;
+}
+
+.message.tool {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.message-part {
+  margin: 8px 0 0;
 }
 
 .composer {
@@ -275,6 +291,79 @@ h2 {
   color: #dce4ec;
   font-size: 13px;
   overflow-wrap: anywhere;
+}
+
+.run-events {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.assistant-stream,
+.tool-card {
+  border: 1px solid #2b343f;
+  border-radius: 8px;
+  padding: 9px;
+  background: #141920;
+}
+
+.assistant-stream header,
+.tool-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #aeb9c5;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.assistant-stream div,
+.tool-preview,
+.tool-result {
+  margin-top: 7px;
+  color: #e6edf4;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.tool-card.status-running {
+  border-color: #6f6650;
+}
+
+.tool-card.status-done {
+  border-color: #335d49;
+}
+
+.tool-card.status-error {
+  border-color: #733838;
+}
+
+.tool-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tool-status {
+  flex: 0 0 auto;
+}
+
+.tool-card details {
+  margin-top: 7px;
+}
+
+.tool-card summary {
+  cursor: pointer;
+  color: #aeb9c5;
+  font-size: 12px;
+}
+
+.tool-card pre {
+  max-height: 180px;
+  border-color: #303a45;
+  background: #0f1318;
+  color: #dce4ec;
 }
 
 .debug-drawer {

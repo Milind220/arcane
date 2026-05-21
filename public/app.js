@@ -5,6 +5,8 @@ const state = {
   loadingSession: false,
   pendingRefresh: null,
   pendingCanvasReload: false,
+  latestRun: null,
+  runEvents: [],
 };
 
 const accessToken = new URLSearchParams(location.search).get('token') || '';
@@ -19,8 +21,10 @@ const els = {
   artifact: document.querySelector('#artifact'),
   reloadCanvas: document.querySelector('#reload-canvas'),
   snapshot: document.querySelector('#snapshot'),
+  cancelRun: document.querySelector('#cancel-run'),
   runStatus: document.querySelector('#run-status'),
   runMessage: document.querySelector('#run-message'),
+  runEvents: document.querySelector('#run-events'),
   debugDrawer: document.querySelector('#debug-drawer'),
   debugJson: document.querySelector('#debug-json'),
   files: document.querySelector('#files'),
@@ -87,7 +91,9 @@ async function loadSession(id, options = {}) {
 function renderSession(data) {
   if (!data) {
     els.sessionTitle.textContent = 'No session';
-    renderRun(null);
+    state.latestRun = null;
+    state.runEvents = [];
+    renderRun(null, []);
     renderFiles([]);
     els.artifact.removeAttribute('src');
     els.artifact.dataset.sessionId = '';
@@ -99,25 +105,33 @@ function renderSession(data) {
     ? data.messages.map(renderMessage).join('')
     : '<p class="empty">No messages yet.</p>';
   els.messages.scrollTop = els.messages.scrollHeight;
-  renderRun(data.run);
+  state.latestRun = data.run;
+  state.runEvents = data.runEvents || [];
+  renderRun(data.run, state.runEvents);
   renderFiles(data.artifactFiles || []);
 }
 
 function renderMessage(message) {
   const role = escapeHtml(message.role);
+  if (message.role === 'tool') return renderToolMessage(message);
+  const parts = Array.isArray(message.parts) && message.parts.length ? renderMessageParts(message.parts) : '';
   return [
     `<article class="message ${role}">`,
     `<strong>${role}</strong>`,
     escapeHtml(message.content),
+    parts,
     '</article>',
   ].join('');
 }
 
-function renderRun(run) {
+function renderRun(run, runEvents = []) {
   const status = run?.status || 'idle';
   els.runStatus.textContent = status;
   els.runStatus.className = `status-pill status-${status}`;
   els.runMessage.textContent = run?.message || 'No run yet.';
+  els.cancelRun.hidden = !isActiveRun(run);
+  els.cancelRun.disabled = !isActiveRun(run);
+  els.runEvents.innerHTML = renderRunEvents(runEvents);
 
   if (run?.status === 'error') {
     els.debugDrawer.classList.add('open');
@@ -128,6 +142,126 @@ function renderRun(run) {
     els.debugDrawer.open = false;
     els.debugJson.textContent = '';
   }
+}
+
+function renderToolMessage(message) {
+  const part = Array.isArray(message.parts) ? message.parts.find((item) => item.type === 'tool_result') : null;
+  return renderToolCard({
+    name: part?.name || 'tool',
+    status: part?.ok === false ? 'error' : 'done',
+    args: undefined,
+    resultPreview: part?.preview || message.content,
+    resultJson: part?.resultJson,
+    error: part?.ok === false ? part.preview || message.content : '',
+  });
+}
+
+function renderMessageParts(parts) {
+  return parts.map((part) => {
+    if (part.type === 'text') return `<p class="message-part">${escapeHtml(part.text)}</p>`;
+    if (part.type === 'tool_call') {
+      return renderToolCard({
+        name: part.name,
+        status: part.status,
+        args: part.args,
+        resultPreview: '',
+      });
+    }
+    if (part.type === 'tool_result') {
+      return renderToolCard({
+        name: part.name,
+        status: part.ok ? 'done' : 'error',
+        resultPreview: part.preview,
+        resultJson: part.resultJson,
+        error: part.ok ? '' : part.preview,
+      });
+    }
+    return '';
+  }).join('');
+}
+
+function renderRunEvents(events) {
+  if (!events.length) return '';
+  const cards = [];
+  const deltas = events
+    .filter((event) => event.type === 'assistant.delta')
+    .sort((a, b) => (a.index || 0) - (b.index || 0))
+    .map((event) => event.delta || '')
+    .join('');
+
+  if (deltas) {
+    cards.push([
+      '<article class="assistant-stream">',
+      '<header><span>Assistant</span><span>streaming</span></header>',
+      `<div>${escapeHtml(deltas)}</div>`,
+      '</article>',
+    ].join(''));
+  }
+
+  for (const tool of summarizeToolEvents(events)) {
+    cards.push(renderToolCard(tool));
+  }
+
+  return cards.join('');
+}
+
+function summarizeToolEvents(events) {
+  const tools = new Map();
+  for (const event of events) {
+    if (!event.type?.startsWith('tool.call.')) continue;
+    const id = event.toolCallId || `${event.name || 'tool'}-${tools.size}`;
+    const current = tools.get(id) || { toolCallId: id, name: event.name || 'tool', status: 'running' };
+    if (event.name) current.name = event.name;
+    if (event.type === 'tool.call.started') {
+      current.status = 'running';
+      current.args = event.args;
+      current.createdAt = event.createdAt;
+    }
+    if (event.type === 'tool.call.updated') {
+      current.status = current.status || 'running';
+      current.patch = event.patch;
+    }
+    if (event.type === 'tool.call.completed') {
+      current.status = 'done';
+      current.resultPreview = event.resultPreview;
+      current.resultJson = event.resultJson;
+      current.completedAt = event.completedAt;
+    }
+    if (event.type === 'tool.call.failed') {
+      current.status = 'error';
+      current.error = event.error;
+      current.completedAt = event.completedAt;
+    }
+    tools.set(id, current);
+  }
+  return [...tools.values()];
+}
+
+function renderToolCard(tool) {
+  const status = tool.status || 'running';
+  const argsPreview = tool.args === undefined ? '' : previewValue(tool.args);
+  const resultPreview = tool.error || tool.resultPreview || '';
+  return [
+    `<article class="tool-card status-${escapeHtml(status)}">`,
+    '<header>',
+    `<span class="tool-name">${escapeHtml(tool.name || 'tool')}</span>`,
+    `<span class="tool-status">${escapeHtml(status)}</span>`,
+    '</header>',
+    argsPreview ? `<div class="tool-preview">${escapeHtml(argsPreview)}</div>` : '',
+    tool.args === undefined ? '' : renderDetails('Arguments', tool.args),
+    resultPreview ? `<div class="tool-result">${escapeHtml(resultPreview)}</div>` : '',
+    tool.resultJson === undefined ? '' : renderDetails('Result', tool.resultJson),
+    '</article>',
+  ].join('');
+}
+
+function renderDetails(label, value) {
+  return [
+    '<details>',
+    `<summary>${escapeHtml(label)}</summary>`,
+    `<pre>${escapeHtml(formatJson(value))}</pre>`,
+    '</details>',
+  ].join('');
 }
 
 function renderFiles(files) {
@@ -163,11 +297,51 @@ function connectEvents(id) {
   source.addEventListener('snapshot.created', () => scheduleRefresh(true));
   source.addEventListener('run.status', (event) => {
     const payload = parseEvent(event);
-    scheduleRefresh(payload?.status === 'done' || payload?.status === 'error');
+    mergeRunEvent(payload);
+  });
+  source.addEventListener('run.created', (event) => mergeRunEvent(parseEvent(event)));
+  source.addEventListener('assistant.delta', (event) => mergeRunEvent(parseEvent(event)));
+  source.addEventListener('tool.call.started', (event) => mergeRunEvent(parseEvent(event)));
+  source.addEventListener('tool.call.updated', (event) => mergeRunEvent(parseEvent(event)));
+  source.addEventListener('tool.call.completed', (event) => mergeRunEvent(parseEvent(event)));
+  source.addEventListener('tool.call.failed', (event) => mergeRunEvent(parseEvent(event)));
+  source.addEventListener('assistant.message', () => scheduleRefresh(false));
+  source.addEventListener('run.done', (event) => {
+    mergeRunEvent(parseEvent(event));
+    scheduleRefresh(false);
+  });
+  source.addEventListener('run.error', (event) => {
+    mergeRunEvent(parseEvent(event));
+    scheduleRefresh(false);
+  });
+  source.addEventListener('run.cancelled', (event) => {
+    mergeRunEvent(parseEvent(event));
+    scheduleRefresh(false);
   });
 
   state.eventSource = source;
   state.eventSessionId = id;
+}
+
+function mergeRunEvent(event) {
+  if (!event?.type || !event.runId) return;
+  if (!state.latestRun || state.latestRun.id === event.runId || event.run) {
+    state.latestRun = event.run || {
+      ...(state.latestRun || { id: event.runId, sessionId: event.sessionId }),
+      status: event.status || state.latestRun?.status,
+      message: event.message || state.latestRun?.message,
+      updatedAt: event.updatedAt || event.createdAt || state.latestRun?.updatedAt,
+    };
+  }
+  if (state.latestRun?.id !== event.runId) return;
+  state.runEvents = [...state.runEvents.filter((item) => eventKey(item) !== eventKey(event)), event];
+  renderRun(state.latestRun, state.runEvents);
+}
+
+function eventKey(event) {
+  if (event.type === 'assistant.delta') return `${event.type}:${event.messageId}:${event.index}`;
+  if (event.toolCallId) return `${event.type}:${event.toolCallId}:${event.completedAt || event.updatedAt || event.createdAt || ''}`;
+  return `${event.type}:${event.runId}:${event.updatedAt || event.createdAt || ''}`;
 }
 
 function scheduleRefresh(reloadCanvasAfter) {
@@ -204,6 +378,25 @@ function parseEvent(event) {
   } catch {
     return null;
   }
+}
+
+function isActiveRun(run) {
+  return run?.status === 'queued' || run?.status === 'thinking' || run?.status === 'editing';
+}
+
+function formatJson(value) {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function previewValue(value, limit = 140) {
+  const text = formatJson(value).replace(/\s+/g, ' ').trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}...`;
 }
 
 function escapeHtml(value) {
@@ -260,6 +453,20 @@ els.snapshot.addEventListener('click', async () => {
   await loadSession(state.currentId, { reloadCanvas: true });
 });
 
+els.cancelRun.addEventListener('click', async () => {
+  const runId = state.latestRun?.id;
+  if (!state.currentId || !runId) return;
+  els.cancelRun.disabled = true;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(state.currentId)}/runs/${encodeURIComponent(runId)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  } finally {
+    await loadSession(state.currentId);
+  }
+});
+
 els.composer.addEventListener('submit', async (event) => {
   event.preventDefault();
   const content = els.content.value.trim();
@@ -280,7 +487,7 @@ els.composer.addEventListener('submit', async (event) => {
     }
   } finally {
     setBusy(false);
-    await loadSession(state.currentId, { reloadCanvas: true });
+    await loadSession(state.currentId);
   }
 });
 
