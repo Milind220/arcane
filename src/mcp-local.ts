@@ -23,6 +23,12 @@ const toolDescriptions = [
 
 export async function handleMcpRequest(store: SessionStore, request: JsonRpcRequest): Promise<any> {
   try {
+    const isNotification = request.id === undefined || request.id === null;
+
+    if (request.method === 'notifications/initialized') {
+      return null;
+    }
+
     if (request.method === 'initialize') {
       return ok(request.id, {
         protocolVersion: '2025-06-18',
@@ -40,9 +46,9 @@ export async function handleMcpRequest(store: SessionStore, request: JsonRpcRequ
       return ok(request.id, { content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }] });
     }
 
-    return error(request.id, -32601, `Unknown method: ${request.method}`);
+    return isNotification ? null : error(request.id, -32601, `Unknown method: ${request.method}`);
   } catch (err: any) {
-    return error(request.id, -32000, err?.message || String(err));
+    return request.id === undefined || request.id === null ? null : error(request.id, -32000, err?.message || String(err));
   }
 }
 
@@ -92,7 +98,7 @@ export async function main(): Promise<void> {
   for await (const line of rl) {
     if (!line.trim()) continue;
     const response = await handleMcpRequest(store, JSON.parse(line));
-    output.write(`${JSON.stringify(response)}\n`);
+    if (response) output.write(`${JSON.stringify(response)}\n`);
   }
 }
 

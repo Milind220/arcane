@@ -6,6 +6,14 @@ import { handleMcpRequest } from '../src/mcp-local.js';
 import { SessionStore } from '../src/session-store.js';
 
 describe('Arcane MCP local JSON-RPC surface', () => {
+  it('ignores JSON-RPC notifications without writing invalid null-id responses', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-mcp-'));
+    const store = new SessionStore(root);
+
+    await expect(handleMcpRequest(store, { jsonrpc: '2.0', method: 'notifications/initialized' })).resolves.toBeNull();
+    await expect(handleMcpRequest(store, { jsonrpc: '2.0', method: 'notifications/unknown' })).resolves.toBeNull();
+  });
+
   it('lists tools and calls session/file tools', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'arcane-mcp-'));
     const store = new SessionStore(root);

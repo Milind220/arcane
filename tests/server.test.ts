@@ -274,11 +274,27 @@ describe('Arcane web server', () => {
     const cookie = grant.headers['set-cookie'];
     const cookieText = Array.isArray(cookie) ? cookie.join('\n') : String(cookie || '');
     expect(cookieText).toContain('HttpOnly');
+    expect(cookieText).toContain('SameSite=Lax');
     expect(cookieText).toContain(`Path=/artifact/${sessionId}`);
+
+    const httpsGrant = await request(app)
+      .post(`/api/sessions/${sessionId}/artifact-access`)
+      .set('x-arcane-token', 'secret-token')
+      .set('x-forwarded-proto', 'https')
+      .expect(204);
+    const httpsCookieText = Array.isArray(httpsGrant.headers['set-cookie']) ? httpsGrant.headers['set-cookie'].join('\n') : String(httpsGrant.headers['set-cookie'] || '');
+    expect(httpsCookieText).toContain('SameSite=None');
+    expect(httpsCookieText).toContain('Secure');
 
     await request(app).get(`/artifact/${sessionId}/index.html`).set('cookie', cookie).expect(200);
     await request(app).get(`/artifact/${sessionId}/styles.css`).set('cookie', cookie).expect(200);
-    const artifact = await request(app).get(`/artifact/${sessionId}/index.html?token=secret-token`).expect(200);
+    const artifact = await request(app)
+      .get(`/artifact/${sessionId}/index.html?token=secret-token`)
+      .set('x-forwarded-proto', 'https')
+      .expect(200);
+    const artifactCookieText = Array.isArray(artifact.headers['set-cookie']) ? artifact.headers['set-cookie'].join('\n') : String(artifact.headers['set-cookie'] || '');
+    expect(artifactCookieText).toContain('SameSite=None');
+    expect(artifactCookieText).toContain('Secure');
     expect(artifact.headers['content-security-policy']).toContain("connect-src 'none'");
     expect(artifact.headers['content-security-policy']).toContain("navigate-to 'none'");
   });

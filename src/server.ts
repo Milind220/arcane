@@ -102,7 +102,7 @@ export function createArcaneApp(
     try {
       const session = await store.getSession(req.params.sessionId);
       if (!session?.artifact?.viewToken) return res.status(404).json({ error: 'session not found' });
-      setArtifactAccessCookie(res, session);
+      setArtifactAccessCookie(req, res, session);
       res.status(204).end();
     } catch (error) { next(error); }
   });
@@ -195,13 +195,13 @@ export function createArcaneApp(
 
   app.get(['/artifact/:sessionId', '/artifact/:sessionId/'], async (req, res, next) => {
     try {
-      await sendArtifactFile(store, req.params.sessionId, 'index.html', res);
+      await sendArtifactFile(store, req.params.sessionId, 'index.html', req, res, accessToken);
     } catch (error) { next(error); }
   });
 
   app.get('/artifact/:sessionId/*', async (req, res, next) => {
     try {
-      await sendArtifactFile(store, req.params.sessionId, (req.params as Record<string, string>)[0] || 'index.html', res);
+      await sendArtifactFile(store, req.params.sessionId, (req.params as Record<string, string>)[0] || 'index.html', req, res, accessToken);
     } catch (error) { next(error); }
   });
 
@@ -222,14 +222,15 @@ function sendPublicFile(fileName: 'index.html' | 'app.css' | 'app.js'): express.
   };
 }
 
-async function sendArtifactFile(store: SessionStore, sessionId: string, relativePath: string, res: Response): Promise<void> {
+async function sendArtifactFile(store: SessionStore, sessionId: string, relativePath: string, req: Request, res: Response, accessToken = ''): Promise<void> {
   const session = await store.getSession(sessionId);
   if (!session) {
     res.status(404).send('session not found');
     return;
   }
 
-  setArtifactSecurityHeaders(res);
+  if (accessToken && String(req.query.token || '') === accessToken) setArtifactAccessCookie(req, res, session);
+  setArtifactSecurityHeaders(req, res);
   const filePath = relativePath.endsWith('/') ? `${relativePath}index.html` : relativePath;
   let artifactPath: string;
   try {
@@ -270,13 +271,19 @@ async function hasValidArtifactCookie(store: SessionStore, req: Request): Promis
   }
 }
 
-function setArtifactAccessCookie(res: Response, session: ArcaneSession): void {
+function setArtifactAccessCookie(req: Request, res: Response, session: ArcaneSession): void {
   if (!session.artifact?.viewToken) return;
+  const secure = isHttpsRequest(req);
   res.cookie(artifactCookieName(session.id), session.artifact.viewToken, {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: secure ? 'none' : 'lax',
+    secure,
     path: `/artifact/${session.id}`,
   });
+}
+
+function isHttpsRequest(req: Request): boolean {
+  return req.secure || String(req.get('x-forwarded-proto') || '').split(',')[0].trim() === 'https';
 }
 
 function artifactCookieName(sessionId: string): string {
@@ -300,16 +307,17 @@ function parseCookies(header: string): Record<string, string> {
   return cookies;
 }
 
-function setArtifactSecurityHeaders(res: Response): void {
+function setArtifactSecurityHeaders(req: Request, res: Response): void {
+  const sameHostSources = artifactSameHostCspSources(req);
   res.setHeader(
     'content-security-policy',
     [
       "default-src 'none'",
-      "script-src 'self' 'unsafe-inline'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob:",
-      "font-src 'self' data:",
-      "media-src 'self' data: blob:",
+      ["script-src", "'self'", "'unsafe-inline'", ...sameHostSources].join(' '),
+      ["style-src", "'self'", "'unsafe-inline'", ...sameHostSources].join(' '),
+      ["img-src", "'self'", ...sameHostSources, 'data:', 'blob:'].join(' '),
+      ["font-src", "'self'", ...sameHostSources, 'data:'].join(' '),
+      ["media-src", "'self'", ...sameHostSources, 'data:', 'blob:'].join(' '),
       "connect-src 'none'",
       "navigate-to 'none'",
       "frame-ancestors 'self'",
@@ -318,6 +326,12 @@ function setArtifactSecurityHeaders(res: Response): void {
     ].join('; '),
   );
   res.setHeader('x-content-type-options', 'nosniff');
+}
+
+function artifactSameHostCspSources(req: Request): string[] {
+  const host = req.get('host') || '';
+  if (!/^[A-Za-z0-9.-]+(?::\d+)?$/.test(host)) return [];
+  return [`http://${host}`, `https://${host}`];
 }
 
 function resolveSafeArtifactPath(root: string, relativePath: string): string {
@@ -409,7 +423,7 @@ export function createDefaultAgentBridge(): AgentBridge | null {
   return {
     async respond({ sessionId, content, messages, files }) {
       const hermesBin = process.env.ARCANE_HERMES_BIN || 'hermes';
-      const timeout = Number(process.env.ARCANE_AGENT_TIMEOUT_MS || 120000);
+      const timeout = Number(process.env.ARCANE_AGENT_TIMEOUT_MS || 300000);
       const prompt = [
         `You are responding inside Arcane session ${sessionId}.`,
         'Arcane is a local chat+canvas app. If Arcane MCP tools are available, use them to update the session artifact files before replying.',
