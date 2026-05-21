@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import path from 'node:path';
+import { ArcaneArtifactService } from './artifact-service.js';
 import { SessionStore } from './session-store.js';
 
 export interface JsonRpcRequest {
@@ -53,6 +54,7 @@ export async function handleMcpRequest(store: SessionStore, request: JsonRpcRequ
 }
 
 async function callTool(store: SessionStore, name: string, args: any): Promise<any> {
+  const artifacts = new ArcaneArtifactService(store);
   switch (name) {
     case 'arcane_create_session':
       return store.createSession(args.title || 'Untitled session', args.hermes);
@@ -69,7 +71,7 @@ async function callTool(store: SessionStore, name: string, args: any): Promise<a
       };
     }
     case 'arcane_write_file':
-      await store.writeFile(args.sessionId, args.path, args.content || '');
+      await artifacts.writeFile(args.sessionId, args.path, args.content || '');
       return { ok: true };
     case 'arcane_read_file':
       return store.readFile(args.sessionId, args.path);
@@ -78,7 +80,7 @@ async function callTool(store: SessionStore, name: string, args: any): Promise<a
     case 'arcane_append_message':
       return store.appendMessage(args.sessionId, args.role || 'user', args.content || '');
     case 'arcane_create_snapshot':
-      return store.createSnapshot(args.sessionId, args.summary || '');
+      return artifacts.createSnapshot(args.sessionId, args.summary || '');
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

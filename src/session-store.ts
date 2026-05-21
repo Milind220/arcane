@@ -1,10 +1,16 @@
 import path from 'node:path';
 import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import type { ArcaneRunEvent } from './arcane-events.js';
 
-export type MessageRole = 'user' | 'assistant' | 'system';
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
-export type AgentRunStatus = 'queued' | 'thinking' | 'editing' | 'done' | 'error';
+export type AgentRunStatus = 'queued' | 'thinking' | 'editing' | 'done' | 'error' | 'cancelled';
+
+export type ArcaneMessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'tool_call'; toolCallId: string; name: string; args: unknown; status: 'running' | 'done' | 'error' }
+  | { type: 'tool_result'; toolCallId: string; name: string; ok: boolean; preview: string; resultJson?: unknown };
 
 export interface ArcaneHermesMetadata {
   profile?: string;
@@ -41,6 +47,9 @@ export interface ArcaneMessage {
   role: MessageRole;
   content: string;
   createdAt: string;
+  runId?: string;
+  toolCallId?: string;
+  parts?: ArcaneMessagePart[];
 }
 
 export interface ArcaneSnapshot {
@@ -57,6 +66,12 @@ export interface AgentRun {
   updatedAt: string;
   message: string;
   debug?: Record<string, unknown>;
+}
+
+export interface AppendMessageOptions {
+  runId?: string;
+  toolCallId?: string;
+  parts?: ArcaneMessagePart[];
 }
 
 const DEFAULT_HTML = `<!doctype html>
@@ -144,12 +159,43 @@ export class SessionStore {
     }
   }
 
-  async appendMessage(sessionId: string, role: MessageRole, content: string): Promise<ArcaneMessage> {
+  async appendMessage(sessionId: string, role: MessageRole, content: string, options: AppendMessageOptions = {}): Promise<ArcaneMessage> {
     const session = await this.requireSession(sessionId);
-    const message: ArcaneMessage = { id: randomUUID(), role, content, createdAt: new Date().toISOString() };
+    const message: ArcaneMessage = {
+      id: randomUUID(),
+      role,
+      content,
+      createdAt: new Date().toISOString(),
+      ...(options.runId ? { runId: options.runId } : {}),
+      ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+      ...(options.parts ? { parts: options.parts } : {}),
+    };
     await writeFile(this.messagePath(sessionId), `${JSON.stringify(message)}\n`, { encoding: 'utf8', flag: 'a' });
     await this.writeSession({ ...session, updatedAt: message.createdAt });
     return message;
+  }
+
+  async appendToolMessage(
+    sessionId: string,
+    runId: string,
+    toolCallId: string,
+    name: string,
+    result: { ok: boolean; preview: string; resultJson?: unknown },
+  ): Promise<ArcaneMessage> {
+    return this.appendMessage(sessionId, 'tool', result.preview, {
+      runId,
+      toolCallId,
+      parts: [
+        {
+          type: 'tool_result',
+          toolCallId,
+          name,
+          ok: result.ok,
+          preview: result.preview,
+          ...(result.resultJson !== undefined ? { resultJson: result.resultJson } : {}),
+        },
+      ],
+    });
   }
 
   async listMessages(sessionId: string): Promise<ArcaneMessage[]> {
@@ -164,6 +210,38 @@ export class SessionStore {
       .split('\n')
       .filter(Boolean)
       .map((line) => JSON.parse(line) as ArcaneMessage);
+  }
+
+  async appendRunEvent(sessionId: string, runId: string, event: ArcaneRunEvent): Promise<ArcaneRunEvent> {
+    await this.requireSession(sessionId);
+    await this.readRun(sessionId, runId);
+    if (event.sessionId !== sessionId || event.runId !== runId) throw new Error('Run event session/run mismatch');
+    const filePath = this.runEventsPath(sessionId, runId);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, `${JSON.stringify(event)}\n`, { encoding: 'utf8', flag: 'a' });
+    return event;
+  }
+
+  async listRunEvents(sessionId: string, runId: string): Promise<ArcaneRunEvent[]> {
+    await this.requireSession(sessionId);
+    await this.readRun(sessionId, runId);
+    let raw = '';
+    try {
+      raw = await readFile(this.runEventsPath(sessionId, runId), 'utf8');
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    return raw
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as ArcaneRunEvent);
+  }
+
+  async listLatestRunEvents(sessionId: string, limit = 100): Promise<ArcaneRunEvent[]> {
+    const run = await this.getLatestRun(sessionId);
+    if (!run) return [];
+    const events = await this.listRunEvents(sessionId, run.id);
+    return events.slice(Math.max(0, events.length - limit));
   }
 
   async listFiles(sessionId: string): Promise<string[]> {
@@ -338,10 +416,14 @@ export class SessionStore {
 
   private runPath(sessionId: string, runId: string): string {
     this.assertValidSessionId(sessionId);
-    if (!runId || path.isAbsolute(runId) || runId.includes('/') || runId.includes('\\')) {
-      throw new Error('Invalid run id');
-    }
+    this.assertValidRunId(runId);
     return path.join(this.runsDir(sessionId), `${runId}.json`);
+  }
+
+  private runEventsPath(sessionId: string, runId: string): string {
+    this.assertValidSessionId(sessionId);
+    this.assertValidRunId(runId);
+    return path.join(this.runsDir(sessionId), runId, 'events.jsonl');
   }
 
   private async writeSession(session: ArcaneSession): Promise<void> {
@@ -408,6 +490,12 @@ export class SessionStore {
   private assertValidSessionId(sessionId: string): void {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(sessionId)) {
       throw new Error('Invalid session id');
+    }
+  }
+
+  private assertValidRunId(runId: string): void {
+    if (!runId || runId === '.' || runId === '..' || path.isAbsolute(runId) || runId.includes('/') || runId.includes('\\')) {
+      throw new Error('Invalid run id');
     }
   }
 }

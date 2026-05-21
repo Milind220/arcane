@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Server } from 'node:http';
 import request from 'supertest';
-import { createArcaneApp } from '../src/server.js';
+import { createArcaneApp, createDefaultAgentBridge } from '../src/server.js';
 import { SessionStore } from '../src/session-store.js';
 
 describe('Arcane web server', () => {
@@ -142,15 +142,126 @@ describe('Arcane web server', () => {
     const response = await request(app)
       .post(`/api/sessions/${sessionId}/agent`)
       .send({ content: 'make a tiny dashboard' })
-      .expect(201);
+      .expect(202);
+    await waitForRunStatus(store, sessionId, response.body.run.id, 'done');
     const resumed = await request(app).get(`/api/sessions/${sessionId}`).expect(200);
 
-    expect(response.body.assistant.content).toContain('heard=make a tiny dashboard');
-    expect(response.body.run).toMatchObject({ sessionId, status: 'done' });
+    expect(response.body.assistant).toBeUndefined();
+    expect(response.body.run).toMatchObject({ sessionId, status: 'thinking' });
     expect(resumed.body.run).toMatchObject({ id: response.body.run.id, status: 'done' });
     expect(resumed.body.runs[0]).toMatchObject({ id: response.body.run.id, status: 'done' });
     expect(resumed.body.messages.map((m: any) => m.role)).toEqual(['user', 'assistant']);
     expect(resumed.body.messages[1].content).toContain(`session=${sessionId}`);
+    expect(resumed.body.messages[1].content).toContain('heard=make a tiny dashboard');
+    expect(resumed.body.runEvents.map((event: any) => event.type)).toEqual(
+      expect.arrayContaining(['run.created', 'run.status', 'assistant.message', 'run.done']),
+    );
+  });
+
+  it('persists and broadcasts structured bridge events with tool messages', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-agent-structured-'));
+    const store = new SessionStore(root);
+    const app = createArcaneApp(store, {
+      respond: async ({ runId, sessionId, emit }) => {
+        await emit({ type: 'assistant.delta', sessionId, runId, messageId: 'msg-1', delta: 'Checking ', index: 0, createdAt: new Date().toISOString() });
+        await emit({ type: 'tool.call.started', sessionId, runId, toolCallId: 'tool-1', name: 'arcane_read_file', args: { path: 'index.html' }, createdAt: new Date().toISOString() });
+        await emit({
+          type: 'tool.call.completed',
+          sessionId,
+          runId,
+          toolCallId: 'tool-1',
+          name: 'arcane_read_file',
+          ok: true,
+          resultPreview: '<main>ready</main>',
+          resultJson: { path: 'index.html' },
+          completedAt: new Date().toISOString(),
+        });
+        await emit({ type: 'assistant.message', sessionId, runId, content: 'The canvas is ready.' });
+        await emit({ type: 'run.done', sessionId, runId, updatedAt: new Date().toISOString() });
+      },
+    });
+
+    const created = await request(app).post('/api/sessions').send({ title: 'Structured' }).expect(201);
+    const sessionId = created.body.id;
+    const server = await listen(app);
+
+    try {
+      const response = await fetch(serverUrl(server, `/api/sessions/${sessionId}/events`));
+      const stream = createStreamReader(response);
+      await stream.waitFor(': connected');
+
+      const started = await request(app).post(`/api/sessions/${sessionId}/agent`).send({ content: 'inspect the canvas' }).expect(202);
+      await stream.waitFor('event: tool.call.started');
+      await stream.waitFor('event: run.done');
+      await stream.cancel();
+
+      await waitForRunStatus(store, sessionId, started.body.run.id, 'done');
+      const resumed = await request(app).get(`/api/sessions/${sessionId}`).expect(200);
+      const runEvents = await request(app).get(`/api/sessions/${sessionId}/runs/${started.body.run.id}/events`).expect(200);
+
+      expect(resumed.body.messages.map((message: any) => message.role)).toEqual(['user', 'tool', 'assistant']);
+      expect(resumed.body.messages[1]).toMatchObject({
+        role: 'tool',
+        toolCallId: 'tool-1',
+        parts: [expect.objectContaining({ type: 'tool_result', name: 'arcane_read_file', preview: '<main>ready</main>' })],
+      });
+      expect(resumed.body.messages[2].content).toBe('The canvas is ready.');
+      expect(runEvents.body.map((event: any) => event.type)).toEqual(
+        expect.arrayContaining(['assistant.delta', 'tool.call.started', 'tool.call.completed', 'assistant.message', 'run.done']),
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it('runs a structured external event-stream bridge command', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-agent-event-stream-'));
+    const scriptPath = path.join(root, 'bridge.mjs');
+    await writeFile(
+      scriptPath,
+      [
+        "let raw = '';",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => { raw += chunk; });",
+        "process.stdin.on('end', () => {",
+        "  const request = JSON.parse(raw);",
+        "  console.log(JSON.stringify({ type: 'tool.call.started', toolCallId: 'external-1', name: 'adapter.echo', args: { content: request.content } }));",
+        "  console.log(JSON.stringify({ type: 'tool.call.completed', toolCallId: 'external-1', name: 'adapter.echo', resultPreview: 'adapter result', resultJson: { ok: true } }));",
+        "  console.log(JSON.stringify({ type: 'assistant.message', content: `adapter heard ${request.content}` }));",
+        "  console.log(JSON.stringify({ type: 'run.done' }));",
+        "});",
+      ].join('\n'),
+      'utf8',
+    );
+
+    const previousMode = process.env.ARCANE_HERMES_MODE;
+    const previousBridge = process.env.ARCANE_HERMES_EVENT_BRIDGE;
+    process.env.ARCANE_HERMES_MODE = 'event-stream';
+    process.env.ARCANE_HERMES_EVENT_BRIDGE = `${process.execPath} ${scriptPath}`;
+
+    try {
+      const store = new SessionStore(root);
+      const bridge = createDefaultAgentBridge();
+      expect(bridge).not.toBeNull();
+      const app = createArcaneApp(store, bridge);
+      const created = await request(app).post('/api/sessions').send({ title: 'External bridge' }).expect(201);
+      const sessionId = created.body.id;
+
+      const started = await request(app).post(`/api/sessions/${sessionId}/agent`).send({ content: 'hello adapter' }).expect(202);
+      await waitForRunStatus(store, sessionId, started.body.run.id, 'done');
+      const resumed = await request(app).get(`/api/sessions/${sessionId}`).expect(200);
+
+      expect(resumed.body.messages.map((message: any) => message.role)).toEqual(['user', 'tool', 'assistant']);
+      expect(resumed.body.messages[2].content).toBe('adapter heard hello adapter');
+      expect(resumed.body.runEvents.map((event: any) => event.type)).toEqual(
+        expect.arrayContaining(['tool.call.started', 'tool.call.completed', 'assistant.message', 'run.done']),
+      );
+    } finally {
+      if (previousMode === undefined) delete process.env.ARCANE_HERMES_MODE;
+      else process.env.ARCANE_HERMES_MODE = previousMode;
+      if (previousBridge === undefined) delete process.env.ARCANE_HERMES_EVENT_BRIDGE;
+      else process.env.ARCANE_HERMES_EVENT_BRIDGE = previousBridge;
+    }
   });
 
   it('streams session events over SSE', async () => {
@@ -189,18 +300,19 @@ describe('Arcane web server', () => {
     const created = await request(app).post('/api/sessions').send({ title: 'Agent fail demo' }).expect(201);
     const sessionId = created.body.id;
 
-    const response = await request(app).post(`/api/sessions/${sessionId}/agent`).send({ content: 'please do a thing' }).expect(502);
+    const response = await request(app).post(`/api/sessions/${sessionId}/agent`).send({ content: 'please do a thing' }).expect(202);
+    const failed = await waitForRunStatus(store, sessionId, response.body.run.id, 'error');
     const resumed = await request(app).get(`/api/sessions/${sessionId}`).expect(200);
     const visibleText = resumed.body.messages.map((m: any) => m.content).join('\n');
 
-    expect(response.body.message).toBe('The agent run failed. Open debug details.');
-    expect(response.body.run).toMatchObject({
+    expect(response.body.message).toBeUndefined();
+    expect(failed).toMatchObject({
       sessionId,
       status: 'error',
       message: 'The agent run failed. Open debug details.',
     });
-    expect(JSON.stringify(response.body.run.debug)).toContain('bridge exploded');
-    expect(JSON.stringify(response.body.run.debug)).toContain('hermes chat');
+    expect(JSON.stringify(failed.debug)).toContain('bridge exploded');
+    expect(JSON.stringify(failed.debug)).toContain('hermes chat');
     expect(response.body.assistant).toBeUndefined();
     expect(resumed.body.messages.map((m: any) => m.role)).toEqual(['user']);
     expect(visibleText).toContain('please do a thing');
@@ -208,6 +320,7 @@ describe('Arcane web server', () => {
     expect(visibleText).not.toContain('hermes chat');
     expect(visibleText).not.toContain('--quiet -q');
     expect(resumed.body.run).toMatchObject({ id: response.body.run.id, status: 'error' });
+    expect(resumed.body.runEvents.map((event: any) => event.type)).toContain('run.error');
   });
 
   it('returns a safe disabled-bridge run without assistant internals', async () => {
@@ -224,6 +337,48 @@ describe('Arcane web server', () => {
     expect(response.body.message).toBe('The agent run failed. Open debug details.');
     expect(response.body.run).toMatchObject({ status: 'error', message: 'The agent run failed. Open debug details.' });
     expect(resumed.body.messages.map((m: any) => m.role)).toEqual(['user']);
+  });
+
+  it('cancels an active agent run through AbortSignal', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-agent-cancel-'));
+    const store = new SessionStore(root);
+    let sawAbort = false;
+    let markBridgeReady!: () => void;
+    let markAbortObserved!: () => void;
+    const bridgeReady = new Promise<void>((resolve) => { markBridgeReady = resolve; });
+    const abortObserved = new Promise<void>((resolve) => { markAbortObserved = resolve; });
+    const app = createArcaneApp(store, {
+      respond: async ({ signal }) => new Promise<void>((_resolve, reject) => {
+        const onAbort = () => {
+          sawAbort = true;
+          markAbortObserved();
+          const error = new Error('cancelled by test');
+          error.name = 'AbortError';
+          reject(error);
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        markBridgeReady();
+        if (signal.aborted) onAbort();
+      }),
+    });
+
+    const created = await request(app).post('/api/sessions').send({ title: 'Cancel demo' }).expect(201);
+    const sessionId = created.body.id;
+    const started = await request(app).post(`/api/sessions/${sessionId}/agent`).send({ content: 'wait forever' }).expect(202);
+    await bridgeReady;
+
+    const cancelled = await request(app)
+      .post(`/api/sessions/${sessionId}/runs/${started.body.run.id}/cancel`)
+      .send({})
+      .expect(202);
+    await abortObserved;
+    const resumed = await request(app).get(`/api/sessions/${sessionId}`).expect(200);
+
+    expect(sawAbort).toBe(true);
+    expect(cancelled.body.run).toMatchObject({ id: started.body.run.id, status: 'cancelled' });
+    expect(resumed.body.run).toMatchObject({ id: started.body.run.id, status: 'cancelled' });
+    expect(resumed.body.messages.map((m: any) => m.role)).toEqual(['user']);
+    expect(resumed.body.runEvents.map((event: any) => event.type)).toContain('run.cancelled');
   });
 
   it('rejects encoded session id traversal before writing files', async () => {
@@ -325,6 +480,17 @@ async function fileExists(filePath: string): Promise<boolean> {
     if (error?.code === 'ENOENT') return false;
     throw error;
   }
+}
+
+async function waitForRunStatus(store: SessionStore, sessionId: string, runId: string, status: string): Promise<any> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const run = (await store.listRuns(sessionId, 10)).find((candidate) => candidate.id === runId);
+    if (run?.status === status) return run;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const run = (await store.listRuns(sessionId, 10)).find((candidate) => candidate.id === runId);
+  throw new Error(`Timed out waiting for run ${runId} to reach ${status}; current=${run?.status || 'missing'}`);
 }
 
 function listen(app: ReturnType<typeof createArcaneApp>): Promise<Server> {
