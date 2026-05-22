@@ -2,6 +2,10 @@
 
 Agent-native chat + canvas workspace. V0 is deliberately tiny: a local web app with chat on the left, a live HTML artifact on the right, local session persistence, hot reload by refresh, and a tiny MCP-compatible tool surface for agents to create/update artifacts.
 
+![Arcane Hermes session showing the browser chat, run events, and canvas](docs/assets/arcane-hermes-session.png)
+
+Yes, that is a real Hermes-flavored Arcane session. The goblin has pixels now.
+
 ## V0 loop
 
 1. Start Arcane on the agent machine.
