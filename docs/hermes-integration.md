@@ -77,6 +77,8 @@ It should emit one JSON object per line using Arcane's run event protocol, for e
 
 Arcane injects the active `sessionId` and `runId` if omitted, persists the events under the run, broadcasts them over SSE, and renders tool cards in the browser.
 
+The browser consumes those SSE events directly. `assistant.delta` updates a live assistant message in the chat thread, `assistant.message` finalizes that message, and `message.appended` inserts durable user, assistant, and tool messages without a page refresh. `artifact.changed` and `snapshot.created` still trigger canvas/session refreshes because they change iframe file state.
+
 `subprocess` mode remains a fallback and still calls `hermes chat --quiet -q`, so it cannot show live tool calls. Use `event-stream`/platform mode for real Hermes integration.
 
 ## Stable JSONL Run Event Contract
@@ -86,7 +88,7 @@ The event-stream adapter writes exactly one JSON object per stdout line. The cur
 Required event types for Hermes adapters:
 
 - `run.status`: `{ type, status, message?, updatedAt? }`, where `status` is one of `queued`, `thinking`, `editing`, `done`, `error`, or `cancelled`.
-- `assistant.delta`: `{ type, messageId?, delta, index?, createdAt? }` for future streaming paths.
+- `assistant.delta`: `{ type, messageId?, delta, index?, createdAt? }` for live assistant text. If `index` is omitted, Arcane assigns an incrementing index per run.
 - `assistant.message`: `{ type, content }` or `{ type, message: { role: "assistant", content, parts? } }`.
 - `tool.call.started`: `{ type, toolCallId, name, args?, category?, createdAt? }`.
 - `tool.call.updated`: `{ type, toolCallId, name?, patch, updatedAt? }`.
@@ -102,6 +104,8 @@ Safety rules:
 - `resultPreview` is the durable UI string for tool results. Keep it short enough for a timeline card; Hermes currently targets bounded previews and sets `resultTruncated: true` when the raw result was larger.
 - `debugRef` is a pointer to a local log, trace id, or stored raw result. It must not contain raw secrets itself.
 - Large or binary tool outputs should be summarized in `resultPreview` and stored elsewhere, referenced by `debugRef` only when the user can inspect that source safely.
+- Tool cards display `category`, `durationMs`, `resultTruncated`, and `debugRef` when provided. Full arguments, structured results, and debug payloads stay collapsed behind details controls.
+- Slash commands such as `/help`, `/commands`, and `/status` should be forwarded through the same event-stream adapter path as normal messages. Arcane does not parse or execute slash commands locally.
 
 ## Degraded Behavior
 
