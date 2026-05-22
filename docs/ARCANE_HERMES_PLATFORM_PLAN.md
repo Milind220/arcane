@@ -96,10 +96,10 @@ export type ArcaneRunEvent =
   | { type: 'run.status'; sessionId: string; runId: string; status: AgentRunStatus; message: string; updatedAt: string }
   | { type: 'assistant.delta'; sessionId: string; runId: string; messageId: string; delta: string; index: number }
   | { type: 'assistant.message'; sessionId: string; runId: string; message: ArcaneMessage }
-  | { type: 'tool.call.started'; sessionId: string; runId: string; toolCallId: string; name: string; args: unknown; createdAt: string }
-  | { type: 'tool.call.updated'; sessionId: string; runId: string; toolCallId: string; patch: unknown; updatedAt: string }
-  | { type: 'tool.call.completed'; sessionId: string; runId: string; toolCallId: string; name: string; ok: boolean; resultPreview: string; resultJson?: unknown; completedAt: string }
-  | { type: 'tool.call.failed'; sessionId: string; runId: string; toolCallId: string; name: string; error: string; debug?: unknown; completedAt: string }
+  | { type: 'tool.call.started'; sessionId: string; runId: string; toolCallId: string; name: string; args: unknown; category?: string; createdAt: string }
+  | { type: 'tool.call.updated'; sessionId: string; runId: string; toolCallId: string; name?: string; patch: unknown; updatedAt: string }
+  | { type: 'tool.call.completed'; sessionId: string; runId: string; toolCallId: string; name: string; ok: true; args?: unknown; resultPreview: string; resultJson?: unknown; resultTruncated?: boolean; durationMs?: number; category?: string; debugRef?: unknown; completedAt: string }
+  | { type: 'tool.call.failed'; sessionId: string; runId: string; toolCallId: string; name: string; ok: false; args?: unknown; error: string; resultPreview?: string; resultTruncated?: boolean; durationMs?: number; category?: string; debug?: unknown; debugRef?: unknown; completedAt: string }
   | { type: 'artifact.changed'; sessionId: string; runId?: string; path: string; file?: ArcaneArtifactFile }
   | { type: 'run.error'; sessionId: string; runId: string; message: string; debug?: unknown; updatedAt: string }
   | { type: 'run.done'; sessionId: string; runId: string; updatedAt: string };
@@ -111,6 +111,7 @@ Rules:
 - Every agent-generated event should include `runId`.
 - Tool args/results are structured JSON when safe, plus a string preview for UI.
 - Large tool results should be truncated in event payloads and stored/debug-linked separately.
+- Tool `durationMs`, `category`, `resultTruncated`, and `debugRef` are optional metadata fields for live Hermes tool events. `debugRef` must point to a safe local trace/log/reference rather than embedding raw sensitive data.
 - The event protocol should be versioned before external exposure, but not before v0. Keep the goblin small.
 
 ## Data Model Changes

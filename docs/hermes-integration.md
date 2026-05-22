@@ -79,6 +79,30 @@ Arcane injects the active `sessionId` and `runId` if omitted, persists the event
 
 `subprocess` mode remains a fallback and still calls `hermes chat --quiet -q`, so it cannot show live tool calls. Use `event-stream`/platform mode for real Hermes integration.
 
+## Stable JSONL Run Event Contract
+
+The event-stream adapter writes exactly one JSON object per stdout line. The current contract is additive: consumers must ignore unknown fields, and producers may omit optional fields. Arcane normalizes missing `sessionId`, `runId`, timestamps, and basic tool names when it receives events from a trusted local adapter.
+
+Required event types for Hermes adapters:
+
+- `run.status`: `{ type, status, message?, updatedAt? }`, where `status` is one of `queued`, `thinking`, `editing`, `done`, `error`, or `cancelled`.
+- `assistant.delta`: `{ type, messageId?, delta, index?, createdAt? }` for future streaming paths.
+- `assistant.message`: `{ type, content }` or `{ type, message: { role: "assistant", content, parts? } }`.
+- `tool.call.started`: `{ type, toolCallId, name, args?, category?, createdAt? }`.
+- `tool.call.updated`: `{ type, toolCallId, name?, patch, updatedAt? }`.
+- `tool.call.completed`: `{ type, toolCallId, name, ok: true, resultPreview, resultJson?, args?, category?, durationMs?, resultTruncated?, debugRef?, completedAt? }`.
+- `tool.call.failed`: `{ type, toolCallId, name, ok: false, error, resultPreview?, args?, category?, durationMs?, resultTruncated?, debug?, debugRef?, completedAt? }`.
+- `run.error`: `{ type, message, debug?, updatedAt? }`.
+- `run.done`: `{ type, updatedAt? }`.
+- `run.cancelled`: `{ type, message?, updatedAt? }`.
+
+Safety rules:
+
+- `args`, `resultJson`, `debug`, and `debugRef` are optional and must be safe for the browser event log. Adapters should redact obvious secret keys and token-like values before emitting them.
+- `resultPreview` is the durable UI string for tool results. Keep it short enough for a timeline card; Hermes currently targets bounded previews and sets `resultTruncated: true` when the raw result was larger.
+- `debugRef` is a pointer to a local log, trace id, or stored raw result. It must not contain raw secrets itself.
+- Large or binary tool outputs should be summarized in `resultPreview` and stored elsewhere, referenced by `debugRef` only when the user can inspect that source safely.
+
 ## Degraded Behavior
 
 When the current Hermes surface cannot render Arcane inline, show the URL as plain text and keep artifact references in the terminal or chat transcript. The user can open the URL in a browser while Hermes continues the text session.

@@ -1,5 +1,12 @@
 import type { AgentRun, AgentRunStatus, ArcaneArtifactFile, ArcaneMessage } from './session-store.js';
 
+export interface ArcaneEventDebugRef {
+  kind: 'log' | 'file' | 'trace' | 'raw' | string;
+  id?: string;
+  path?: string;
+  note?: string;
+}
+
 export type ArcaneRunEvent =
   | {
       type: 'run.created';
@@ -42,6 +49,7 @@ export type ArcaneRunEvent =
       toolCallId: string;
       name: string;
       args: unknown;
+      category?: string;
       createdAt: string;
     }
   | {
@@ -60,8 +68,13 @@ export type ArcaneRunEvent =
       toolCallId: string;
       name: string;
       ok: true;
+      args?: unknown;
       resultPreview: string;
       resultJson?: unknown;
+      resultTruncated?: boolean;
+      durationMs?: number;
+      category?: string;
+      debugRef?: ArcaneEventDebugRef;
       completedAt: string;
     }
   | {
@@ -71,8 +84,14 @@ export type ArcaneRunEvent =
       toolCallId: string;
       name: string;
       ok: false;
+      args?: unknown;
       error: string;
+      resultPreview?: string;
+      resultTruncated?: boolean;
+      durationMs?: number;
+      category?: string;
       debug?: unknown;
+      debugRef?: ArcaneEventDebugRef;
       completedAt: string;
     }
   | {

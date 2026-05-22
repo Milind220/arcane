@@ -108,6 +108,7 @@ describe('SessionStore', () => {
       toolCallId: 'tool-1',
       name: 'arcane_read_file',
       args: { path: 'index.html' },
+      category: 'file',
       createdAt: '2026-05-21T00:00:00.000Z',
     });
     await store.appendRunEvent(session.id, run.id, {
@@ -119,6 +120,8 @@ describe('SessionStore', () => {
       ok: true,
       resultPreview: '<h1>Arcane</h1>',
       resultJson: { ok: true },
+      durationMs: 25,
+      category: 'file',
       completedAt: '2026-05-21T00:00:01.000Z',
     });
 
@@ -126,6 +129,7 @@ describe('SessionStore', () => {
     const latest = await store.listLatestRunEvents(session.id);
 
     expect(events.map((event) => event.type)).toEqual(['tool.call.started', 'tool.call.completed']);
+    expect(events[1]).toMatchObject({ durationMs: 25, category: 'file' });
     expect(latest).toEqual(events);
   });
 

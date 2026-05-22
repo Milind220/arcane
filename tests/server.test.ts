@@ -164,7 +164,16 @@ describe('Arcane web server', () => {
     const app = createArcaneApp(store, {
       respond: async ({ runId, sessionId, emit }) => {
         await emit({ type: 'assistant.delta', sessionId, runId, messageId: 'msg-1', delta: 'Checking ', index: 0, createdAt: new Date().toISOString() });
-        await emit({ type: 'tool.call.started', sessionId, runId, toolCallId: 'tool-1', name: 'arcane_read_file', args: { path: 'index.html' }, createdAt: new Date().toISOString() });
+        await emit({
+          type: 'tool.call.started',
+          sessionId,
+          runId,
+          toolCallId: 'tool-1',
+          name: 'arcane_read_file',
+          args: { path: 'index.html' },
+          category: 'file',
+          createdAt: new Date().toISOString(),
+        });
         await emit({
           type: 'tool.call.completed',
           sessionId,
@@ -172,8 +181,13 @@ describe('Arcane web server', () => {
           toolCallId: 'tool-1',
           name: 'arcane_read_file',
           ok: true,
+          args: { path: 'index.html' },
           resultPreview: '<main>ready</main>',
           resultJson: { path: 'index.html' },
+          resultTruncated: false,
+          durationMs: 17,
+          category: 'file',
+          debugRef: { kind: 'trace', id: 'tool-1' },
           completedAt: new Date().toISOString(),
         });
         await emit({ type: 'assistant.message', sessionId, runId, content: 'The canvas is ready.' });
@@ -209,6 +223,16 @@ describe('Arcane web server', () => {
       expect(runEvents.body.map((event: any) => event.type)).toEqual(
         expect.arrayContaining(['assistant.delta', 'tool.call.started', 'tool.call.completed', 'assistant.message', 'run.done']),
       );
+      expect(runEvents.body.find((event: any) => event.type === 'tool.call.started')).toMatchObject({
+        category: 'file',
+        args: { path: 'index.html' },
+      });
+      expect(runEvents.body.find((event: any) => event.type === 'tool.call.completed')).toMatchObject({
+        durationMs: 17,
+        category: 'file',
+        resultTruncated: false,
+        debugRef: { kind: 'trace', id: 'tool-1' },
+      });
     } finally {
       await closeServer(server);
     }

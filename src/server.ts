@@ -672,6 +672,7 @@ function normalizeRunEventInput(record: Record<string, unknown>, sessionId: stri
         toolCallId: stringOr(record.toolCallId, randomToolCallId()),
         name: stringOr(record.name, 'tool'),
         args: record.args ?? record.arguments ?? {},
+        ...(typeof record.category === 'string' ? { category: record.category } : {}),
         createdAt: stringOr(record.createdAt, now),
       };
     case 'tool.call.updated':
@@ -692,8 +693,13 @@ function normalizeRunEventInput(record: Record<string, unknown>, sessionId: stri
         toolCallId: stringOr(record.toolCallId, randomToolCallId()),
         name: stringOr(record.name, 'tool'),
         ok: true,
+        ...(record.args !== undefined ? { args: record.args } : {}),
         resultPreview: stringOr(record.resultPreview, previewValue(record.resultJson ?? record.result ?? '')),
         ...(record.resultJson !== undefined ? { resultJson: record.resultJson } : record.result !== undefined ? { resultJson: record.result } : {}),
+        ...(typeof record.resultTruncated === 'boolean' ? { resultTruncated: record.resultTruncated } : {}),
+        ...(Number.isFinite(Number(record.durationMs)) ? { durationMs: Number(record.durationMs) } : {}),
+        ...(typeof record.category === 'string' ? { category: record.category } : {}),
+        ...(record.debugRef !== undefined ? { debugRef: record.debugRef as any } : {}),
         completedAt: stringOr(record.completedAt, now),
       };
     case 'tool.call.failed':
@@ -704,8 +710,14 @@ function normalizeRunEventInput(record: Record<string, unknown>, sessionId: stri
         toolCallId: stringOr(record.toolCallId, randomToolCallId()),
         name: stringOr(record.name, 'tool'),
         ok: false,
+        ...(record.args !== undefined ? { args: record.args } : {}),
         error: stringOr(record.error, 'Tool call failed.'),
+        ...(typeof record.resultPreview === 'string' ? { resultPreview: record.resultPreview } : {}),
+        ...(typeof record.resultTruncated === 'boolean' ? { resultTruncated: record.resultTruncated } : {}),
+        ...(Number.isFinite(Number(record.durationMs)) ? { durationMs: Number(record.durationMs) } : {}),
+        ...(typeof record.category === 'string' ? { category: record.category } : {}),
         ...(record.debug !== undefined ? { debug: record.debug } : {}),
+        ...(record.debugRef !== undefined ? { debugRef: record.debugRef as any } : {}),
         completedAt: stringOr(record.completedAt, now),
       };
     case 'run.error':
