@@ -288,6 +288,60 @@ describe('Arcane web server', () => {
     }
   });
 
+  it('broadcasts assistant deltas, assistant messages, and appended tool/assistant messages over SSE', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-agent-live-stream-'));
+    const store = new SessionStore(root);
+    const app = createArcaneApp(store, {
+      respond: async ({ runId, sessionId, emit }) => {
+        await emit({ type: 'assistant.delta', sessionId, runId, messageId: 'live-1', delta: 'hello ' });
+        await emit({ type: 'assistant.delta', sessionId, runId, messageId: 'live-1', delta: 'world' });
+        await emit({
+          type: 'tool.call.completed',
+          sessionId,
+          runId,
+          toolCallId: 'live-tool-1',
+          name: 'arcane_status',
+          resultPreview: 'status ok',
+        });
+        await emit({ type: 'assistant.message', sessionId, runId, content: 'hello world' });
+        await emit({ type: 'run.done', sessionId, runId });
+      },
+    });
+
+    const created = await request(app).post('/api/sessions').send({ title: 'Live stream' }).expect(201);
+    const sessionId = created.body.id;
+    const server = await listen(app);
+
+    try {
+      const response = await fetch(serverUrl(server, `/api/sessions/${sessionId}/events`));
+      const stream = createStreamReader(response);
+      await stream.waitFor(': connected');
+
+      const started = await request(app).post(`/api/sessions/${sessionId}/agent`).send({ content: '/status' }).expect(202);
+      const raw = await stream.waitFor('event: run.done');
+      await stream.cancel();
+
+      await waitForRunStatus(store, sessionId, started.body.run.id, 'done');
+      const runEvents = await request(app).get(`/api/sessions/${sessionId}/runs/${started.body.run.id}/events`).expect(200);
+
+      expect(raw.match(/event: assistant\.delta/g)?.length).toBe(2);
+      expect(raw).toContain('"delta":"hello "');
+      expect(raw).toContain('"index":0');
+      expect(raw).toContain('"delta":"world"');
+      expect(raw).toContain('"index":1');
+      expect(raw).toContain('event: assistant.message');
+      expect(raw).toContain('"role":"tool"');
+      expect(raw).toContain('"role":"assistant"');
+      expect(raw.match(/event: message\.appended/g)?.length).toBeGreaterThanOrEqual(3);
+      expect(runEvents.body.filter((event: any) => event.type === 'assistant.delta').map((event: any) => event.index)).toEqual([0, 1]);
+      expect(runEvents.body.map((event: any) => event.type)).toEqual(
+        expect.arrayContaining(['assistant.delta', 'assistant.message', 'tool.call.completed', 'run.done']),
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it('streams session events over SSE', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'arcane-events-'));
     const store = new SessionStore(root);

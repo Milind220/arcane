@@ -179,7 +179,7 @@ export function createArcaneApp(
       }
 
       const controller = new AbortController();
-      const activeRun: ActiveRun = { controller, terminal: false, assistantFinal: false };
+      const activeRun: ActiveRun = { controller, terminal: false, assistantFinal: false, nextDeltaIndex: 0 };
       activeRuns.set(activeRunKey(session.id, queued.id), activeRun);
 
       const run = await store.updateRun(session.id, queued.id, { status: 'thinking', message: 'Agent is thinking.' });
@@ -433,6 +433,7 @@ interface ActiveRun {
   controller: AbortController;
   terminal: boolean;
   assistantFinal: boolean;
+  nextDeltaIndex: number;
 }
 
 interface ExecuteAgentRunInput {
@@ -551,7 +552,9 @@ async function ingestBridgeRunEvent(
     return;
   }
 
-  let event = normalizeRunEventInput(record, sessionId, runId);
+  const normalizedRecord = withAssistantDeltaIndex(record, activeRun);
+  let event = normalizeRunEventInput(normalizedRecord, sessionId, runId);
+  if (event.type === 'assistant.delta') activeRun.nextDeltaIndex = Math.max(activeRun.nextDeltaIndex, event.index + 1);
 
   if (event.type === 'run.status') {
     const run = await store.updateRun(sessionId, runId, { status: event.status, message: event.message });
@@ -760,6 +763,12 @@ function isAgentRunStatus(value: unknown): value is AgentRunStatus {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted'));
+}
+
+function withAssistantDeltaIndex(record: Record<string, unknown>, activeRun: ActiveRun): Record<string, unknown> {
+  if (record.type !== 'assistant.delta') return record;
+  if (Number.isFinite(Number(record.index))) return record;
+  return { ...record, index: activeRun.nextDeltaIndex };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

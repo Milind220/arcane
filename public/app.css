@@ -192,6 +192,10 @@ select {
   background: #171d24;
 }
 
+.message.streaming {
+  border-color: #4d5c6d;
+}
+
 .message.tool {
   padding: 0;
   border: 0;
@@ -200,6 +204,35 @@ select {
 
 .message-part {
   margin: 8px 0 0;
+}
+
+.command-list {
+  display: grid;
+  gap: 6px;
+}
+
+.command-row {
+  display: grid;
+  grid-template-columns: minmax(82px, auto) minmax(0, 1fr);
+  gap: 9px;
+  align-items: baseline;
+}
+
+.command-row code {
+  color: #d7e7f5;
+  font-size: 13px;
+}
+
+.command-row span {
+  color: #c4ced8;
+}
+
+.json-response {
+  margin-top: 0;
+  max-height: 220px;
+  border-color: #303a45;
+  background: #0f1318;
+  color: #dce4ec;
 }
 
 .composer {
@@ -347,6 +380,22 @@ h2 {
 
 .tool-status {
   flex: 0 0 auto;
+}
+
+.tool-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+  color: #b8c3ce;
+  font-size: 12px;
+}
+
+.tool-meta span {
+  border: 1px solid #303a45;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #0f1318;
 }
 
 .tool-card details {
