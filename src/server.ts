@@ -1,10 +1,22 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { SessionStore, type AgentRun, type ArcaneArtifactFile, type ArcaneMessage, type ArcaneSession, type MessageRole } from './session-store.js';
+import { ArcaneArtifactService } from './artifact-service.js';
+import { type ArcaneRunEvent, type ArcaneSessionEvent } from './arcane-events.js';
+import {
+  SessionStore,
+  type AgentRun,
+  type AgentRunStatus,
+  type ArcaneArtifactFile,
+  type ArcaneMessage,
+  type ArcaneMessagePart,
+  type ArcaneSession,
+  type MessageRole,
+} from './session-store.js';
 
 const execFileAsync = promisify(execFile);
 const SAFE_AGENT_ERROR_MESSAGE = 'The agent run failed. Open debug details.';
@@ -12,13 +24,22 @@ const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 
 export interface AgentRequest {
   sessionId: string;
+  runId: string;
   content: string;
   messages: Awaited<ReturnType<SessionStore['listMessages']>>;
   files: string[];
+  emit: (event: AgentBridgeRunEventInput) => Promise<void> | void;
+  signal: AbortSignal;
+}
+
+export type AgentBridgeRunEventInput = ArcaneRunEvent | { type: string; [key: string]: unknown };
+
+export interface AgentBridgeResult {
+  finalMessage?: string;
 }
 
 export interface AgentBridge {
-  respond(request: AgentRequest): Promise<string>;
+  respond(request: AgentRequest): Promise<string | AgentBridgeResult | void>;
 }
 
 export interface ArcaneAppOptions {
@@ -32,13 +53,8 @@ interface SessionPayload {
   artifactFiles: ArcaneArtifactFile[];
   run: AgentRun | null;
   runs: AgentRun[];
+  runEvents: ArcaneRunEvent[];
 }
-
-type ArcaneSessionEvent =
-  | { type: 'message.appended'; sessionId: string; message: ArcaneMessage }
-  | { type: 'run.status'; sessionId: string; run: AgentRun; status: AgentRun['status'] }
-  | { type: 'artifact.changed'; sessionId: string; path: string; file?: ArcaneArtifactFile }
-  | { type: 'snapshot.created'; sessionId: string; snapshotId: string };
 
 export function createArcaneApp(
   store = new SessionStore(),
@@ -47,6 +63,8 @@ export function createArcaneApp(
 ): Express {
   const app = express();
   const eventBus = createSessionEventBus();
+  const artifactService = new ArcaneArtifactService(store, (event) => eventBus.emit(event));
+  const activeRuns = new Map<string, ActiveRun>();
 
   app.use(express.json({ limit: '5mb' }));
   app.use(express.text({ type: ['text/*', 'application/javascript', 'text/css', 'text/html'], limit: '5mb' }));
@@ -111,7 +129,11 @@ export function createArcaneApp(
     try {
       const role = (req.body?.role || 'user') as MessageRole;
       const content = String(req.body?.content || '');
-      const message = await store.appendMessage(req.params.sessionId, role, content);
+      const message = await store.appendMessage(req.params.sessionId, role, content, {
+        ...(req.body?.runId ? { runId: String(req.body.runId) } : {}),
+        ...(req.body?.toolCallId ? { toolCallId: String(req.body.toolCallId) } : {}),
+        ...(Array.isArray(req.body?.parts) ? { parts: req.body.parts as ArcaneMessagePart[] } : {}),
+      });
       eventBus.emit({ type: 'message.appended', sessionId: req.params.sessionId, message });
       res.status(201).json(message);
     } catch (error) { next(error); }
@@ -128,43 +150,93 @@ export function createArcaneApp(
       eventBus.emit({ type: 'message.appended', sessionId: session.id, message: user });
 
       const queued = await store.createRun(session.id, { status: 'queued', message: 'Agent run queued.' });
-      eventBus.emit({ type: 'run.status', sessionId: session.id, run: queued, status: queued.status });
-
-      let run = await store.updateRun(session.id, queued.id, { status: 'thinking', message: 'Agent is thinking.' });
-      eventBus.emit({ type: 'run.status', sessionId: session.id, run, status: run.status });
+      await persistRunEvent(store, eventBus, {
+        type: 'run.created',
+        sessionId: session.id,
+        runId: queued.id,
+        status: 'queued',
+        message: queued.message,
+        createdAt: queued.createdAt,
+        run: queued,
+      });
 
       if (!agentBridge) {
-        run = await store.updateRun(session.id, run.id, {
+        const run = await store.updateRun(session.id, queued.id, {
           status: 'error',
           message: SAFE_AGENT_ERROR_MESSAGE,
           debug: { message: 'agent bridge is not configured' },
         });
-        eventBus.emit({ type: 'run.status', sessionId: session.id, run, status: run.status });
+        await persistRunEvent(store, eventBus, {
+          type: 'run.error',
+          sessionId: session.id,
+          runId: run.id,
+          message: run.message,
+          debug: run.debug,
+          updatedAt: run.updatedAt,
+          run,
+        });
         return res.status(503).json({ message: SAFE_AGENT_ERROR_MESSAGE, error: SAFE_AGENT_ERROR_MESSAGE, user, run });
       }
 
-      try {
-        const reply = await agentBridge.respond({
-          sessionId: session.id,
-          content,
-          messages: await store.listMessages(session.id),
-          files: await store.listFiles(session.id),
-        });
-        const assistant = await store.appendMessage(session.id, 'assistant', reply);
-        eventBus.emit({ type: 'message.appended', sessionId: session.id, message: assistant });
+      const controller = new AbortController();
+      const activeRun: ActiveRun = { controller, terminal: false, assistantFinal: false, nextDeltaIndex: 0 };
+      activeRuns.set(activeRunKey(session.id, queued.id), activeRun);
 
-        run = await store.updateRun(session.id, run.id, { status: 'done', message: 'Agent run completed.' });
-        eventBus.emit({ type: 'run.status', sessionId: session.id, run, status: run.status });
-        res.status(201).json({ user, assistant, run });
-      } catch (error: any) {
-        run = await store.updateRun(session.id, run.id, {
-          status: 'error',
-          message: SAFE_AGENT_ERROR_MESSAGE,
-          debug: serializeAgentError(error),
-        });
-        eventBus.emit({ type: 'run.status', sessionId: session.id, run, status: run.status });
-        res.status(502).json({ message: SAFE_AGENT_ERROR_MESSAGE, error: SAFE_AGENT_ERROR_MESSAGE, user, run });
-      }
+      const run = await store.updateRun(session.id, queued.id, { status: 'thinking', message: 'Agent is thinking.' });
+      await persistRunEvent(store, eventBus, {
+        type: 'run.status',
+        sessionId: session.id,
+        runId: run.id,
+        status: run.status,
+        message: run.message,
+        updatedAt: run.updatedAt,
+        run,
+      });
+
+      void executeAgentRun({
+        store,
+        eventBus,
+        agentBridge,
+        activeRuns,
+        activeRun,
+        sessionId: session.id,
+        runId: run.id,
+        content,
+      });
+
+      res.status(202).json({ user, run });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/sessions/:sessionId/runs/:runId/events', async (req, res, next) => {
+    try {
+      const session = await store.getSession(req.params.sessionId);
+      if (!session) return res.status(404).json({ error: 'session not found' });
+      res.json(await store.listRunEvents(session.id, req.params.runId));
+    } catch (error) { next(error); }
+  });
+
+  app.post('/api/sessions/:sessionId/runs/:runId/cancel', async (req, res, next) => {
+    try {
+      const session = await store.getSession(req.params.sessionId);
+      if (!session) return res.status(404).json({ error: 'session not found' });
+
+      const key = activeRunKey(session.id, req.params.runId);
+      const activeRun = activeRuns.get(key);
+      if (activeRun) activeRun.terminal = true;
+      if (activeRun && !activeRun.controller.signal.aborted) activeRun.controller.abort();
+
+      const run = await store.updateRun(session.id, req.params.runId, { status: 'cancelled', message: 'Agent run cancelled.' });
+      await persistRunEvent(store, eventBus, {
+        type: 'run.cancelled',
+        sessionId: session.id,
+        runId: run.id,
+        message: run.message,
+        updatedAt: run.updatedAt,
+        run,
+      });
+
+      res.status(202).json({ run });
     } catch (error) { next(error); }
   });
 
@@ -172,23 +244,20 @@ export function createArcaneApp(
     try {
       const filePath = (req.params as Record<string, string>)[0];
       const content = typeof req.body === 'string' ? req.body : String(req.body?.content || '');
-      await store.writeFile(req.params.sessionId, filePath, content);
+      const file = await artifactService.writeFile(req.params.sessionId, filePath, content);
 
       const payload = await buildSessionPayload(store, req.params.sessionId);
       if (!payload) return res.status(404).json({ error: 'session not found' });
-      const file = payload.artifactFiles.find((artifactFile) => artifactFile.path === filePath);
-      eventBus.emit({ type: 'artifact.changed', sessionId: req.params.sessionId, path: filePath, ...(file ? { file } : {}) });
       res.status(200).json({ ...payload, file: file || null });
     } catch (error) { next(error); }
   });
 
   app.post('/api/sessions/:sessionId/snapshots', async (req, res, next) => {
     try {
-      const snapshot = await store.createSnapshot(req.params.sessionId, req.body?.summary || '');
+      const snapshot = await artifactService.createSnapshot(req.params.sessionId, req.body?.summary || '');
       const payload = await buildSessionPayload(store, req.params.sessionId);
       if (!payload) return res.status(404).json({ error: 'session not found' });
 
-      eventBus.emit({ type: 'snapshot.created', sessionId: req.params.sessionId, snapshotId: snapshot.id });
       res.status(201).json({ ...snapshot, snapshot, ...payload });
     } catch (error) { next(error); }
   });
@@ -348,14 +417,380 @@ async function buildSessionPayload(store: SessionStore, sessionId: string): Prom
   const session = await store.getSession(sessionId);
   if (!session) return null;
   const runs = await store.listRuns(session.id, 5);
+  const run = runs[0] || null;
   return {
     session,
     messages: await store.listMessages(session.id),
     files: await store.listFiles(session.id),
     artifactFiles: await store.listArtifactFileMetadata(session.id),
-    run: runs[0] || null,
+    run,
     runs,
+    runEvents: run ? await store.listRunEvents(session.id, run.id) : [],
   };
+}
+
+interface ActiveRun {
+  controller: AbortController;
+  terminal: boolean;
+  assistantFinal: boolean;
+  nextDeltaIndex: number;
+}
+
+interface ExecuteAgentRunInput {
+  store: SessionStore;
+  eventBus: ReturnType<typeof createSessionEventBus>;
+  agentBridge: AgentBridge;
+  activeRuns: Map<string, ActiveRun>;
+  activeRun: ActiveRun;
+  sessionId: string;
+  runId: string;
+  content: string;
+}
+
+async function executeAgentRun(input: ExecuteAgentRunInput): Promise<void> {
+  const { store, eventBus, agentBridge, activeRuns, activeRun, sessionId, runId, content } = input;
+  const key = activeRunKey(sessionId, runId);
+
+  try {
+    const messages = await store.listMessages(sessionId);
+    const files = await store.listFiles(sessionId);
+    if (activeRun.terminal || activeRun.controller.signal.aborted) return;
+
+    const result = await agentBridge.respond({
+      sessionId,
+      runId,
+      content,
+      messages,
+      files,
+      signal: activeRun.controller.signal,
+      emit: async (event) => {
+        if (activeRun.terminal) return;
+        await ingestBridgeRunEvent(store, eventBus, activeRun, sessionId, runId, event);
+      },
+    });
+
+    if (activeRun.controller.signal.aborted) return;
+
+    const finalMessage = bridgeFinalMessage(result);
+    if (finalMessage !== undefined && !activeRun.assistantFinal) {
+      await appendAssistantMessageEvent(store, eventBus, activeRun, sessionId, runId, finalMessage);
+    }
+
+    if (!activeRun.terminal) {
+      const run = await store.updateRun(sessionId, runId, { status: 'done', message: 'Agent run completed.' });
+      activeRun.terminal = true;
+      await persistRunEvent(store, eventBus, {
+        type: 'run.done',
+        sessionId,
+        runId,
+        updatedAt: run.updatedAt,
+        run,
+      });
+    }
+  } catch (error) {
+    if (activeRun.terminal) return;
+
+    if (activeRun.controller.signal.aborted || isAbortError(error)) {
+      const run = await store.updateRun(sessionId, runId, { status: 'cancelled', message: 'Agent run cancelled.' });
+      activeRun.terminal = true;
+      await persistRunEvent(store, eventBus, {
+        type: 'run.cancelled',
+        sessionId,
+        runId,
+        message: run.message,
+        updatedAt: run.updatedAt,
+        run,
+      });
+      return;
+    }
+
+    const run = await store.updateRun(sessionId, runId, {
+      status: 'error',
+      message: SAFE_AGENT_ERROR_MESSAGE,
+      debug: serializeAgentError(error),
+    });
+    activeRun.terminal = true;
+    await persistRunEvent(store, eventBus, {
+      type: 'run.error',
+      sessionId,
+      runId,
+      message: run.message,
+      debug: run.debug,
+      updatedAt: run.updatedAt,
+      run,
+    });
+  } finally {
+    activeRuns.delete(key);
+  }
+}
+
+async function ingestBridgeRunEvent(
+  store: SessionStore,
+  eventBus: ReturnType<typeof createSessionEventBus>,
+  activeRun: ActiveRun,
+  sessionId: string,
+  runId: string,
+  input: AgentBridgeRunEventInput,
+): Promise<void> {
+  const record = asRecord(input);
+  if (!record.type) throw new Error('Agent bridge event is missing type');
+
+  if (record.type === 'assistant.message') {
+    const messageRecord = asRecord(record.message);
+    const content = typeof messageRecord.content === 'string' ? messageRecord.content : String(record.content ?? '');
+    const parts = Array.isArray(messageRecord.parts)
+      ? (messageRecord.parts as ArcaneMessagePart[])
+      : Array.isArray(record.parts)
+        ? (record.parts as ArcaneMessagePart[])
+        : undefined;
+    const toolCallId = typeof messageRecord.toolCallId === 'string'
+      ? messageRecord.toolCallId
+      : typeof record.toolCallId === 'string'
+        ? record.toolCallId
+        : undefined;
+    await appendAssistantMessageEvent(store, eventBus, activeRun, sessionId, runId, content, { parts, toolCallId });
+    return;
+  }
+
+  const normalizedRecord = withAssistantDeltaIndex(record, activeRun);
+  let event = normalizeRunEventInput(normalizedRecord, sessionId, runId);
+  if (event.type === 'assistant.delta') activeRun.nextDeltaIndex = Math.max(activeRun.nextDeltaIndex, event.index + 1);
+
+  if (event.type === 'run.status') {
+    const run = await store.updateRun(sessionId, runId, { status: event.status, message: event.message });
+    event = { ...event, status: run.status, message: run.message, updatedAt: run.updatedAt, run };
+  }
+
+  if (event.type === 'run.done') {
+    const run = await store.updateRun(sessionId, runId, { status: 'done', message: 'Agent run completed.' });
+    activeRun.terminal = true;
+    event = { ...event, updatedAt: run.updatedAt, run };
+  }
+
+  if (event.type === 'run.error') {
+    const run = await store.updateRun(sessionId, runId, {
+      status: 'error',
+      message: event.message || SAFE_AGENT_ERROR_MESSAGE,
+      ...(event.debug !== undefined ? { debug: asDebugRecord(event.debug) } : {}),
+    });
+    activeRun.terminal = true;
+    event = { ...event, message: run.message, debug: run.debug, updatedAt: run.updatedAt, run };
+  }
+
+  if (event.type === 'run.cancelled') {
+    const run = await store.updateRun(sessionId, runId, { status: 'cancelled', message: event.message || 'Agent run cancelled.' });
+    activeRun.terminal = true;
+    event = { ...event, message: run.message, updatedAt: run.updatedAt, run };
+  }
+
+  await persistRunEvent(store, eventBus, event);
+
+  if (event.type === 'tool.call.completed') {
+    const message = await store.appendToolMessage(sessionId, runId, event.toolCallId, event.name, {
+      ok: true,
+      preview: event.resultPreview,
+      ...(event.resultJson !== undefined ? { resultJson: event.resultJson } : {}),
+    });
+    eventBus.emit({ type: 'message.appended', sessionId, message });
+  }
+
+  if (event.type === 'tool.call.failed') {
+    const message = await store.appendToolMessage(sessionId, runId, event.toolCallId, event.name, {
+      ok: false,
+      preview: event.error,
+    });
+    eventBus.emit({ type: 'message.appended', sessionId, message });
+  }
+}
+
+async function appendAssistantMessageEvent(
+  store: SessionStore,
+  eventBus: ReturnType<typeof createSessionEventBus>,
+  activeRun: ActiveRun,
+  sessionId: string,
+  runId: string,
+  content: string,
+  options: { parts?: ArcaneMessagePart[]; toolCallId?: string } = {},
+): Promise<ArcaneMessage> {
+  const message = await store.appendMessage(sessionId, 'assistant', content, {
+    runId,
+    ...(options.parts ? { parts: options.parts } : {}),
+    ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+  });
+  activeRun.assistantFinal = true;
+  const event: ArcaneRunEvent = { type: 'assistant.message', sessionId, runId, message, createdAt: message.createdAt };
+  await persistRunEvent(store, eventBus, event);
+  eventBus.emit({ type: 'message.appended', sessionId, message });
+  return message;
+}
+
+async function persistRunEvent(
+  store: SessionStore,
+  eventBus: ReturnType<typeof createSessionEventBus>,
+  event: ArcaneRunEvent,
+): Promise<ArcaneRunEvent> {
+  await store.appendRunEvent(event.sessionId, event.runId, event);
+  eventBus.emit(event);
+  return event;
+}
+
+function normalizeRunEventInput(record: Record<string, unknown>, sessionId: string, runId: string): ArcaneRunEvent {
+  const now = new Date().toISOString();
+  const type = String(record.type);
+
+  switch (type) {
+    case 'run.created':
+      return {
+        type,
+        sessionId,
+        runId,
+        status: 'queued',
+        message: stringOr(record.message, 'Agent run queued.'),
+        createdAt: stringOr(record.createdAt, now),
+      };
+    case 'run.status':
+      return {
+        type,
+        sessionId,
+        runId,
+        status: isAgentRunStatus(record.status) ? record.status : 'thinking',
+        message: stringOr(record.message, 'Agent is thinking.'),
+        updatedAt: stringOr(record.updatedAt, now),
+      };
+    case 'assistant.delta':
+      return {
+        type,
+        sessionId,
+        runId,
+        messageId: stringOr(record.messageId, `assistant-${runId}`),
+        delta: String(record.delta ?? ''),
+        index: Number.isFinite(Number(record.index)) ? Number(record.index) : 0,
+        createdAt: stringOr(record.createdAt, now),
+      };
+    case 'tool.call.started':
+      return {
+        type,
+        sessionId,
+        runId,
+        toolCallId: stringOr(record.toolCallId, randomToolCallId()),
+        name: stringOr(record.name, 'tool'),
+        args: record.args ?? record.arguments ?? {},
+        ...(typeof record.category === 'string' ? { category: record.category } : {}),
+        createdAt: stringOr(record.createdAt, now),
+      };
+    case 'tool.call.updated':
+      return {
+        type,
+        sessionId,
+        runId,
+        toolCallId: stringOr(record.toolCallId, randomToolCallId()),
+        ...(typeof record.name === 'string' ? { name: record.name } : {}),
+        patch: record.patch ?? {},
+        updatedAt: stringOr(record.updatedAt, now),
+      };
+    case 'tool.call.completed':
+      return {
+        type,
+        sessionId,
+        runId,
+        toolCallId: stringOr(record.toolCallId, randomToolCallId()),
+        name: stringOr(record.name, 'tool'),
+        ok: true,
+        ...(record.args !== undefined ? { args: record.args } : {}),
+        resultPreview: stringOr(record.resultPreview, previewValue(record.resultJson ?? record.result ?? '')),
+        ...(record.resultJson !== undefined ? { resultJson: record.resultJson } : record.result !== undefined ? { resultJson: record.result } : {}),
+        ...(typeof record.resultTruncated === 'boolean' ? { resultTruncated: record.resultTruncated } : {}),
+        ...(Number.isFinite(Number(record.durationMs)) ? { durationMs: Number(record.durationMs) } : {}),
+        ...(typeof record.category === 'string' ? { category: record.category } : {}),
+        ...(record.debugRef !== undefined ? { debugRef: record.debugRef as any } : {}),
+        completedAt: stringOr(record.completedAt, now),
+      };
+    case 'tool.call.failed':
+      return {
+        type,
+        sessionId,
+        runId,
+        toolCallId: stringOr(record.toolCallId, randomToolCallId()),
+        name: stringOr(record.name, 'tool'),
+        ok: false,
+        ...(record.args !== undefined ? { args: record.args } : {}),
+        error: stringOr(record.error, 'Tool call failed.'),
+        ...(typeof record.resultPreview === 'string' ? { resultPreview: record.resultPreview } : {}),
+        ...(typeof record.resultTruncated === 'boolean' ? { resultTruncated: record.resultTruncated } : {}),
+        ...(Number.isFinite(Number(record.durationMs)) ? { durationMs: Number(record.durationMs) } : {}),
+        ...(typeof record.category === 'string' ? { category: record.category } : {}),
+        ...(record.debug !== undefined ? { debug: record.debug } : {}),
+        ...(record.debugRef !== undefined ? { debugRef: record.debugRef as any } : {}),
+        completedAt: stringOr(record.completedAt, now),
+      };
+    case 'run.error':
+      return {
+        type,
+        sessionId,
+        runId,
+        message: stringOr(record.message, SAFE_AGENT_ERROR_MESSAGE),
+        ...(record.debug !== undefined ? { debug: record.debug } : {}),
+        updatedAt: stringOr(record.updatedAt, now),
+      };
+    case 'run.done':
+      return { type, sessionId, runId, updatedAt: stringOr(record.updatedAt, now) };
+    case 'run.cancelled':
+      return {
+        type,
+        sessionId,
+        runId,
+        message: stringOr(record.message, 'Agent run cancelled.'),
+        updatedAt: stringOr(record.updatedAt, now),
+      };
+    default:
+      throw new Error(`Unknown agent bridge event type: ${type}`);
+  }
+}
+
+function bridgeFinalMessage(result: string | AgentBridgeResult | void): string | undefined {
+  if (typeof result === 'string') return result;
+  if (result && typeof result.finalMessage === 'string') return result.finalMessage;
+  return undefined;
+}
+
+function activeRunKey(sessionId: string, runId: string): string {
+  return `${sessionId}:${runId}`;
+}
+
+function isAgentRunStatus(value: unknown): value is AgentRunStatus {
+  return value === 'queued' || value === 'thinking' || value === 'editing' || value === 'done' || value === 'error' || value === 'cancelled';
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted'));
+}
+
+function withAssistantDeltaIndex(record: Record<string, unknown>, activeRun: ActiveRun): Record<string, unknown> {
+  if (record.type !== 'assistant.delta') return record;
+  if (Number.isFinite(Number(record.index))) return record;
+  return { ...record, index: activeRun.nextDeltaIndex };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asDebugRecord(value: unknown): Record<string, unknown> {
+  return asRecord(value) === value ? (value as Record<string, unknown>) : { value };
+}
+
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function previewValue(value: unknown, limit = 500): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (!text) return '';
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function randomToolCallId(): string {
+  return `tool-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function createSessionEventBus(): {
@@ -419,9 +854,29 @@ function serializeAgentError(error: unknown): Record<string, unknown> {
 }
 
 export function createDefaultAgentBridge(): AgentBridge | null {
-  if (process.env.ARCANE_AGENT_DISABLED === '1') return null;
+  if (process.env.ARCANE_AGENT_DISABLED === '1' || process.env.ARCANE_HERMES_MODE === 'disabled') return null;
+  const mode = String(process.env.ARCANE_HERMES_MODE || (process.env.ARCANE_HERMES_EVENT_BRIDGE ? 'event-stream' : 'subprocess')).toLowerCase();
+
+  if (mode === 'event-stream' || mode === 'platform') {
+    return { respond: runEventStreamBridge };
+  }
+
+  if (mode !== 'subprocess') {
+    return {
+      async respond() {
+        throw new Error(`Unsupported ARCANE_HERMES_MODE: ${mode}`);
+      },
+    };
+  }
+
   return {
-    async respond({ sessionId, content, messages, files }) {
+    async respond(request) {
+      return runSubprocessBridge(request);
+    },
+  };
+}
+
+async function runSubprocessBridge({ sessionId, content, messages, files, signal }: AgentRequest): Promise<AgentBridgeResult> {
       const hermesBin = process.env.ARCANE_HERMES_BIN || 'hermes';
       const timeout = Number(process.env.ARCANE_AGENT_TIMEOUT_MS || 300000);
       const prompt = [
@@ -440,13 +895,82 @@ export function createDefaultAgentBridge(): AgentBridge | null {
       const { stdout, stderr } = await execFileAsync(hermesBin, ['chat', '--quiet', '-q', prompt], {
         timeout,
         maxBuffer: 1024 * 1024,
+        signal,
         env: { ...process.env, ARCANE_SESSION_ID: sessionId },
       });
       const text = stdout.trim() || stderr.trim();
       if (!text) throw new Error('agent returned no response');
-      return text;
+      return { finalMessage: text };
+}
+
+async function runEventStreamBridge(request: AgentRequest): Promise<AgentBridgeResult> {
+  const command = process.env.ARCANE_HERMES_EVENT_BRIDGE;
+  if (!command) throw new Error('ARCANE_HERMES_EVENT_BRIDGE is required when ARCANE_HERMES_MODE=event-stream');
+
+  const child = spawn(command, {
+    shell: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      ARCANE_SESSION_ID: request.sessionId,
+      ARCANE_RUN_ID: request.runId,
     },
+  });
+
+  let stderr = '';
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk) => {
+    stderr = `${stderr}${chunk}`.slice(-4096);
+  });
+
+  const abort = () => {
+    if (!child.killed) child.kill('SIGTERM');
   };
+  request.signal.addEventListener('abort', abort, { once: true });
+
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const outputTask = (async () => {
+    for await (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      await request.emit(JSON.parse(trimmed) as AgentBridgeRunEventInput);
+    }
+  })();
+
+  const exitTask = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signalName) => resolve({ code, signal: signalName }));
+  });
+
+  child.stdin?.end(`${JSON.stringify({
+    sessionId: request.sessionId,
+    runId: request.runId,
+    content: request.content,
+    messages: request.messages,
+    files: request.files,
+  })}\n`);
+
+  try {
+    const [exit] = await Promise.all([exitTask, outputTask.then(() => undefined)]);
+    if (request.signal.aborted) throw createAbortError();
+    if (exit.code !== 0) {
+      const detail = stderr.trim() ? `: ${stderr.trim()}` : '';
+      throw new Error(`Hermes event bridge exited with code ${exit.code ?? exit.signal}${detail}`);
+    }
+    return {};
+  } catch (error) {
+    if (!child.killed) child.kill('SIGTERM');
+    throw error;
+  } finally {
+    request.signal.removeEventListener('abort', abort);
+    lines.close();
+  }
+}
+
+function createAbortError(): Error {
+  const error = new Error('Agent run cancelled.');
+  error.name = 'AbortError';
+  return error;
 }
 
 export async function main(): Promise<void> {

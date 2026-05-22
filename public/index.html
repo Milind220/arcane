@@ -14,6 +14,7 @@
       </div>
       <div id="run-status" class="status-pill status-idle">idle</div>
       <div class="top-actions">
+        <button id="cancel-run" type="button" class="secondary" hidden>Cancel</button>
         <button id="reload-canvas" type="button" class="secondary">Reload canvas</button>
         <button id="snapshot" type="button">Snapshot</button>
       </div>
@@ -51,6 +52,7 @@
             <section class="run-panel">
               <h2>Run</h2>
               <p id="run-message" class="run-message">No run yet.</p>
+              <div id="run-events" class="run-events"></div>
               <details id="debug-drawer" class="debug-drawer">
                 <summary>Debug details</summary>
                 <pre id="debug-json"></pre>

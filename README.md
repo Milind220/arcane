@@ -2,6 +2,10 @@
 
 Agent-native chat + canvas workspace. V0 is deliberately tiny: a local web app with chat on the left, a live HTML artifact on the right, local session persistence, hot reload by refresh, and a tiny MCP-compatible tool surface for agents to create/update artifacts.
 
+![Arcane Hermes session showing the browser chat, run events, and canvas](docs/assets/arcane-hermes-session.png)
+
+Yes, that is a real Hermes-flavored Arcane session. The goblin has pixels now.
+
 ## V0 loop
 
 1. Start Arcane on the agent machine.
@@ -59,7 +63,7 @@ This requires `cloudflared` on `PATH`; otherwise the helper prints the exact `cl
 
 ## Hermes chat bridge
 
-The web UI can call a local Hermes CLI process when you submit a message:
+The web UI can call a local Hermes bridge when you submit a message:
 
 ```bash
 ARCANE_HOME=/root/arcane/.arcane npm start
@@ -72,6 +76,16 @@ hermes chat --quiet -q "<Arcane session prompt>"
 ```
 
 Disable the bridge with `ARCANE_AGENT_DISABLED=1`, or override the binary with `ARCANE_HERMES_BIN=/path/to/hermes`.
+
+For live Hermes gateway behavior, run an event-stream adapter that reads one JSON request on stdin and writes one Arcane run event JSON object per stdout line:
+
+```bash
+ARCANE_HERMES_MODE=event-stream \
+ARCANE_HERMES_EVENT_BRIDGE="/path/to/hermes-arcane-adapter" \
+npm start
+```
+
+In event-stream mode, assistant deltas, final assistant messages, run status, and tool call events stream into the browser chat and run panel without a page refresh. Slash commands such as `/help`, `/commands`, and `/status` are sent through the same `/agent` endpoint for Hermes to handle.
 
 ## Public tunnel safety
 

@@ -95,6 +95,87 @@ describe('SessionStore', () => {
     expect(latest).toMatchObject({ id: queued.id, status: 'done' });
   });
 
+  it('stores structured run events under a run', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
+    const store = new SessionStore(root);
+    const session = await store.createSession('Run events');
+    const run = await store.createRun(session.id, { status: 'queued', message: 'Queued.' });
+
+    await store.appendRunEvent(session.id, run.id, {
+      type: 'tool.call.started',
+      sessionId: session.id,
+      runId: run.id,
+      toolCallId: 'tool-1',
+      name: 'arcane_read_file',
+      args: { path: 'index.html' },
+      category: 'file',
+      createdAt: '2026-05-21T00:00:00.000Z',
+    });
+    await store.appendRunEvent(session.id, run.id, {
+      type: 'tool.call.completed',
+      sessionId: session.id,
+      runId: run.id,
+      toolCallId: 'tool-1',
+      name: 'arcane_read_file',
+      ok: true,
+      resultPreview: '<h1>Arcane</h1>',
+      resultJson: { ok: true },
+      durationMs: 25,
+      category: 'file',
+      completedAt: '2026-05-21T00:00:01.000Z',
+    });
+
+    const events = await store.listRunEvents(session.id, run.id);
+    const latest = await store.listLatestRunEvents(session.id);
+
+    expect(events.map((event) => event.type)).toEqual(['tool.call.started', 'tool.call.completed']);
+    expect(events[1]).toMatchObject({ durationMs: 25, category: 'file' });
+    expect(latest).toEqual(events);
+  });
+
+  it('rejects dot-segment run ids for run event storage', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
+    const store = new SessionStore(root);
+    const session = await store.createSession('Run id validation');
+
+    await expect(store.listRunEvents(session.id, '..')).rejects.toThrow('Invalid run id');
+  });
+
+  it('persists tool messages with structured parts while legacy messages remain valid', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
+    const store = new SessionStore(root);
+    const session = await store.createSession('Parts');
+    const run = await store.createRun(session.id, { status: 'queued', message: 'Queued.' });
+
+    await store.appendMessage(session.id, 'assistant', 'plain legacy-compatible text');
+    const tool = await store.appendToolMessage(session.id, run.id, 'tool-42', 'arcane_write_file', {
+      ok: true,
+      preview: 'Wrote index.html',
+      resultJson: { path: 'index.html' },
+    });
+
+    const messages = await store.listMessages(session.id);
+
+    expect(messages[0]).toMatchObject({ role: 'assistant', content: 'plain legacy-compatible text' });
+    expect(messages[0].parts).toBeUndefined();
+    expect(tool).toMatchObject({
+      role: 'tool',
+      runId: run.id,
+      toolCallId: 'tool-42',
+      parts: [
+        {
+          type: 'tool_result',
+          toolCallId: 'tool-42',
+          name: 'arcane_write_file',
+          ok: true,
+          preview: 'Wrote index.html',
+          resultJson: { path: 'index.html' },
+        },
+      ],
+    });
+    expect(messages[1]).toEqual(tool);
+  });
+
   it('lists sessions newest first and snapshots artifact state', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'arcane-test-'));
     const store = new SessionStore(root);
